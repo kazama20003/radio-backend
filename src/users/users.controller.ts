@@ -17,13 +17,27 @@ import {
   UpdateProfileDto,
   UpdateUserDto,
 } from './dto/user.dto';
+import { PersonalSyncService } from './personal-sync.service';
 import { UsersService } from './users.service';
 
 @ApiTags('users')
 @ApiBearerAuth()
 @Controller('users')
 export class UsersController {
-  constructor(private readonly users: UsersService) {}
+  constructor(
+    private readonly users: UsersService,
+    private readonly personalSync: PersonalSyncService,
+  ) {}
+
+  /**
+   * Importa/actualiza usuarios de la app desde el sistema de personal (RRHH).
+   * Idempotente: se puede llamar cuantas veces se quiera.
+   */
+  @Roles(Role.ADMIN, Role.SUPERVISOR)
+  @Post('sync-personal')
+  syncPersonal() {
+    return this.personalSync.syncFromPersonal();
+  }
 
   @Get('me')
   me(@CurrentUser('id') id: string) {
