@@ -1,0 +1,467 @@
+// Mape — Esquema de base de datos
+// Dominio: monitoreo y coordinación de flota de transporte de carga en tiempo real.
+// Docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  runtime      = "nodejs"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─────────────────────────────────────────────────────────────
+// Enums
+// ─────────────────────────────────────────────────────────────
+
+enum Role {
+  ADMIN
+  SUPERVISOR
+  OPERATOR
+}
+
+enum Shift {
+  MANANA
+  TARDE
+  NOCHE
+}
+
+enum UnitStatus {
+  EN_RUTA
+  DETENIDO
+  DISPONIBLE
+  DESCONECTADO
+  MANTENIMIENTO
+}
+
+enum RouteStatus {
+  PLANIFICADA
+  EN_CURSO
+  COMPLETADA
+  CANCELADA
+}
+
+enum StopKind {
+  ORIGEN
+  PARADA
+  PEAJE
+  DESTINO
+}
+
+enum StopStatus {
+  PENDIENTE
+  EN_CURSO
+  COMPLETADA
+  OMITIDA
+}
+
+enum GeofenceType {
+  ALMACEN
+  PEAJE
+  DESTINO
+  ZONA_RESTRINGIDA
+}
+
+enum ChannelType {
+  OPERACIONES
+  ZONA
+  TALLER
+}
+
+enum ConversationType {
+  DIRECT
+  GROUP
+}
+
+enum MessageType {
+  TEXT
+  VOICE
+  IMAGE
+  VIDEO
+  LOCATION
+  SYSTEM
+}
+
+enum AlertType {
+  EXCESO_VELOCIDAD
+  PARADA_PROLONGADA
+  SALIDA_GEOCERCA
+  DESVIO_RUTA
+  SOS
+}
+
+enum AlertSeverity {
+  CRITICA
+  ADVERTENCIA
+  INFO
+}
+
+enum AlertStatus {
+  ABIERTA
+  ATENDIDA
+  RESUELTA
+  DESCARTADA
+}
+
+enum OtpPurpose {
+  PASSWORD_RESET
+  LOGIN
+}
+
+enum DevicePlatform {
+  IOS
+  ANDROID
+  WEB
+}
+
+// ─────────────────────────────────────────────────────────────
+// Usuarios y seguridad
+// ─────────────────────────────────────────────────────────────
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  operatorCode  String?   @unique // "código de operador" para login alterno
+  passwordHash  String
+  name          String
+  nickname      String? // apelativo / indicativo para la radio (p.ej. "Halcón 1")
+  role          Role      @default(OPERATOR)
+  shift         Shift     @default(MANANA)
+  positionTitle String? // cargo, p.ej. "Supervisor de operaciones"
+  phone         String?
+  avatarKey     String? // variante de avatar o key en storage
+  isActive      Boolean   @default(true)
+  isOnline      Boolean   @default(false)
+  lastSeenAt    DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Relaciones
+  drivenUnit           Unit?
+  routes               Route[]
+  sentMessages         Message[]
+  conversationMembers  ConversationMember[]
+  createdConversations Conversation[]         @relation("ConversationCreator")
+  messageReceipts      MessageReceipt[]
+  channelMembers       ChannelMember[]
+  radioTransmissions   RadioTransmission[]
+  alerts               Alert[]                @relation("AlertOperator")
+  acknowledgedAlerts   Alert[]                @relation("AlertAck")
+  notificationPref     NotificationPreference?
+  appSetting           AppSetting?
+  refreshTokens        RefreshToken[]
+  otpCodes             OtpCode[]
+  deviceTokens         DeviceToken[]
+
+  @@index([role])
+}
+
+model RefreshToken {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  userAgent String?
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+}
+
+model OtpCode {
+  id          String     @id @default(cuid())
+  userId      String?
+  user        User?      @relation(fields: [userId], references: [id], onDelete: SetNull)
+  destination String // correo o teléfono al que se envió
+  codeHash    String
+  purpose     OtpPurpose
+  attempts    Int        @default(0)
+  expiresAt   DateTime
+  consumedAt  DateTime?
+  createdAt   DateTime   @default(now())
+
+  @@index([destination, purpose])
+}
+
+model DeviceToken {
+  id        String         @id @default(cuid())
+  userId    String
+  user      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token     String         @unique
+  platform  DevicePlatform
+  createdAt DateTime       @default(now())
+
+  @@index([userId])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Flota, posiciones, rutas y geocercas
+// ─────────────────────────────────────────────────────────────
+
+model Unit {
+  id            String     @id @default(cuid())
+  code          String     @unique // "T-102"
+  plate         String     @unique // "ABC-123"
+  brand         String? // "Volvo"
+  model         String? // "FH 460"
+  capacityTons  Float?
+  status        UnitStatus @default(DESCONECTADO)
+  isActive      Boolean    @default(true)
+
+  operatorId    String? @unique
+  operator      User?   @relation(fields: [operatorId], references: [id], onDelete: SetNull)
+
+  // Última posición conocida (desnormalizada para el mapa)
+  lastLat       Float?
+  lastLng       Float?
+  lastSpeedKmh  Float?
+  lastHeading   Float?
+  lastPositionAt DateTime?
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  positions Position[]
+  routes    Route[]
+  alerts    Alert[]
+
+  @@index([status])
+}
+
+model Position {
+  id         String   @id @default(cuid())
+  unitId     String
+  unit       Unit     @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  lat        Float
+  lng        Float
+  speedKmh   Float    @default(0)
+  heading    Float?
+  accuracy   Float?
+  recordedAt DateTime
+  createdAt  DateTime @default(now())
+
+  @@index([unitId, recordedAt])
+}
+
+model Route {
+  id               String      @id @default(cuid())
+  code             String      @unique
+  unitId           String?
+  unit             Unit?       @relation(fields: [unitId], references: [id], onDelete: SetNull)
+  operatorId       String?
+  operator         User?       @relation(fields: [operatorId], references: [id], onDelete: SetNull)
+  status           RouteStatus @default(PLANIFICADA)
+  plannedDate      DateTime?
+  startedAt        DateTime?
+  completedAt      DateTime?
+
+  // Carga / guía de remisión
+  cargoDescription String?
+  cargoPallets     Int?
+  cargoWeightTons  Float?
+  guiaRemision     String?
+
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+
+  stops RouteStop[]
+
+  @@index([status])
+}
+
+model RouteStop {
+  id        String     @id @default(cuid())
+  routeId   String
+  route     Route      @relation(fields: [routeId], references: [id], onDelete: Cascade)
+  order     Int
+  kind      StopKind   @default(PARADA)
+  name      String
+  address   String?
+  lat       Float?
+  lng       Float?
+  plannedAt DateTime?
+  arrivedAt DateTime?
+  status    StopStatus @default(PENDIENTE)
+
+  @@index([routeId, order])
+}
+
+model Geofence {
+  id           String       @id @default(cuid())
+  name         String
+  type         GeofenceType
+  centerLat    Float
+  centerLng    Float
+  radiusMeters Float
+  isActive     Boolean      @default(true)
+  createdAt    DateTime     @default(now())
+}
+
+// ─────────────────────────────────────────────────────────────
+// Radio (push-to-talk)
+// ─────────────────────────────────────────────────────────────
+
+model Channel {
+  id          String          @id @default(cuid())
+  name        String // "Canal 1"
+  type        ChannelType     @default(OPERACIONES)
+  description String? // "Norte", "Taller"
+  isActive    Boolean         @default(true)
+  createdAt   DateTime        @default(now())
+
+  members       ChannelMember[]
+  transmissions RadioTransmission[]
+}
+
+model ChannelMember {
+  channelId String
+  channel   Channel  @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  joinedAt  DateTime @default(now())
+
+  @@id([channelId, userId])
+  @@index([userId])
+}
+
+model RadioTransmission {
+  id          String   @id @default(cuid())
+  channelId   String
+  channel     Channel  @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  senderId    String
+  sender      User     @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  audioKey    String? // key en storage (grabación PTT)
+  durationSec Float    @default(0)
+  createdAt   DateTime @default(now())
+
+  @@index([channelId, createdAt])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Chat
+// ─────────────────────────────────────────────────────────────
+
+model Conversation {
+  id            String           @id @default(cuid())
+  type          ConversationType @default(DIRECT)
+  title         String? // solo para grupos
+  createdById   String?
+  createdBy     User?            @relation("ConversationCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  lastMessageAt DateTime?
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  members  ConversationMember[]
+  messages Message[]
+
+  @@index([lastMessageAt])
+}
+
+model ConversationMember {
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  isAdmin        Boolean      @default(false)
+  lastReadAt     DateTime?
+  joinedAt       DateTime     @default(now())
+
+  @@id([conversationId, userId])
+  @@index([userId])
+}
+
+model Message {
+  id             String       @id @default(cuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  senderId       String
+  sender         User         @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  type           MessageType  @default(TEXT)
+  body           String? // texto
+  attachmentKey  String? // voz/imagen en storage
+  durationSec    Float? // notas de voz
+  lat            Float? // mensajes de ubicación
+  lng            Float?
+  locationLabel  String?
+  createdAt      DateTime     @default(now())
+
+  receipts MessageReceipt[]
+
+  @@index([conversationId, createdAt])
+}
+
+model MessageReceipt {
+  messageId   String
+  message     Message   @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deliveredAt DateTime?
+  readAt      DateTime?
+
+  @@id([messageId, userId])
+  @@index([userId])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Alertas
+// ─────────────────────────────────────────────────────────────
+
+model Alert {
+  id               String        @id @default(cuid())
+  type             AlertType
+  severity         AlertSeverity @default(ADVERTENCIA)
+  status           AlertStatus   @default(ABIERTA)
+  unitId           String?
+  unit             Unit?         @relation(fields: [unitId], references: [id], onDelete: SetNull)
+  operatorId       String?
+  operator         User?         @relation("AlertOperator", fields: [operatorId], references: [id], onDelete: SetNull)
+  title            String
+  description      String?
+  lat              Float?
+  lng              Float?
+  locationLabel    String?
+  metadata         Json? // p.ej. { "speed": 96, "limit": 80 }
+  acknowledgedById String?
+  acknowledgedBy   User?         @relation("AlertAck", fields: [acknowledgedById], references: [id], onDelete: SetNull)
+  acknowledgedAt   DateTime?
+  resolvedAt       DateTime?
+  createdAt        DateTime      @default(now())
+
+  @@index([status, severity])
+  @@index([createdAt])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Preferencias y ajustes
+// ─────────────────────────────────────────────────────────────
+
+model NotificationPreference {
+  userId          String   @id
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  criticalAlerts  Boolean  @default(true)
+  chatMessages    Boolean  @default(true)
+  radioBroadcasts Boolean  @default(true)
+  unitStatus      Boolean  @default(true)
+  dailyDigest     Boolean  @default(false)
+  soundVibration  Boolean  @default(true)
+  doNotDisturb    Boolean  @default(false)
+  dndFrom         String? // "22:00"
+  dndTo           String? // "06:00"
+  updatedAt       DateTime @updatedAt
+}
+
+model AppSetting {
+  userId             String   @id
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  refreshIntervalSec Int      @default(5) // frecuencia de rastreo
+  liveLocation       Boolean  @default(true)
+  transitMap         Boolean  @default(false)
+  radioSound         Boolean  @default(true)
+  criticalAlerts     Boolean  @default(true)
+  darkMode           Boolean  @default(false)
+  updatedAt          DateTime @updatedAt
+}
