@@ -1,7 +1,19 @@
-allowBuilds:
-  '@parcel/watcher': true
-  '@prisma/client': true
-  '@prisma/engines': true
-  esbuild: true
-  prisma: true
-  unrs-resolver: true
+# pnpm 10/11 lee la configuración específica de pnpm desde aquí (ya no del .npmrc).
+
+# No verificar dependencias antes de cada script (evita que `pnpm db:deploy` /
+# `pnpm build` disparen un `pnpm install` que puede fallar en el servidor).
+verifyDepsBeforeRun: false
+
+# Paquetes cuyos scripts de build SÍ permitimos ejecutar.
+onlyBuiltDependencies:
+  - '@parcel/watcher'
+  - '@prisma/client'
+  - '@prisma/engines'
+  - esbuild
+  - prisma
+  - unrs-resolver
+
+# Paquetes cuyos scripts de build ignoramos a propósito (telemetría, opcionales).
+# Listarlos aquí evita el error ERR_PNPM_IGNORED_BUILDS.
+ignoredBuiltDependencies:
+  - '@scarf/scarf'
