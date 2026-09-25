@@ -161,7 +161,13 @@ export class AuthService {
 
   // ── Helpers ──────────────────────────────────────────────────
   private async buildSession(user: User) {
-    const payload = { sub: user.id, email: user.email, role: user.role };
+    const payload = {
+      sub: user.id,
+      email: user.email,
+      role: user.role,
+      name: user.name,
+      nickname: user.nickname,
+    };
     const accessToken = await this.jwt.signAsync(payload, {
       secret: process.env.JWT_ACCESS_SECRET ?? 'dev-access-secret',
       expiresIn: (process.env.JWT_ACCESS_TTL ?? '15m') as unknown as number,

@@ -14,15 +14,24 @@ import { authenticateSocket } from '../common/ws/ws-auth.util';
 import { RadioFloorService } from './radio-floor.service';
 import { RadioService } from './radio.service';
 
-/** Tamaño máximo de un chunk de audio (bytes). Evita abusos de memoria/ancho. */
-const MAX_CHUNK_BYTES = 64 * 1024; // 64 KB por chunk (~muy holgado para voz)
+/**
+ * Tamaño máximo de un mensaje de audio. El cliente envía el clip PTT completo
+ * (base64) al soltar el botón, no chunks en vivo, así que necesita holgura para
+ * mensajes de hasta ~60 s.
+ */
+const MAX_CHUNK_BYTES = 4 * 1024 * 1024; // 4 MB
 
 /**
  * Señalización y streaming push-to-talk medio dúplex: un solo hablante a la vez
  * por canal, con cola de "pedir la palabra". El audio se transmite en vivo como
  * chunks binarios que el servidor reenvía (relay) al resto del canal.
  */
-@WebSocketGateway({ namespace: '/radio', cors: { origin: '*' } })
+@WebSocketGateway({
+  namespace: '/radio',
+  cors: { origin: '*' },
+  // El audio PTT viaja como base64 en un solo mensaje; ampliamos el buffer.
+  maxHttpBufferSize: 6 * 1024 * 1024, // 6 MB
+})
 export class RadioGateway implements OnGatewayConnection, OnGatewayDisconnect {
   private readonly logger = new Logger(RadioGateway.name);
 

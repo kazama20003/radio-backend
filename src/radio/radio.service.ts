@@ -10,7 +10,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CreateChannelDto, TransmissionDto } from './dto/radio.dto';
 
 const senderSelect = {
-  select: { id: true, name: true, avatarKey: true },
+  select: { id: true, name: true, nickname: true, avatarKey: true },
 } satisfies Prisma.UserDefaultArgs;
 
 @Injectable()
