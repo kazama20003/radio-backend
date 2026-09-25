@@ -35,7 +35,7 @@ export class PersonalSyncService {
   private get sourceUrl(): string {
     return (
       process.env.PERSONAL_API_URL ||
-      'http://api.syemape.com/api/publico/personal'
+      'https://api.syemape.com/api/publico/personal'
     );
   }
 
@@ -123,12 +123,11 @@ export class PersonalSyncService {
         );
       }
       const data: unknown = await res.json();
-      // Soporta tanto un array plano como { data: [...] } / { personal: [...] }.
+      // Soporta un array plano o { datos: [...] } / { data: [...] } / { personal: [...] }.
+      const obj = data as Record<string, unknown>;
       const list = Array.isArray(data)
         ? data
-        : ((data as Record<string, unknown>)?.data ??
-            (data as Record<string, unknown>)?.personal ??
-            []);
+        : (obj?.datos ?? obj?.data ?? obj?.personal ?? []);
       if (!Array.isArray(list)) return [];
       return list as PersonalRecord[];
     } catch (err) {
@@ -155,6 +154,7 @@ export class PersonalSyncService {
     if (!dni) return null; // sin DNI no podemos identificarlo
 
     // Filtro de seguridad (el endpoint ya debería mandar solo activos).
+    if (r.activo === false) return null;
     const estadoActivo = this.str(r, ['estadoActivo', 'estado']);
     const estadoRegistro = this.str(r, ['estadoRegistro']);
     if (estadoActivo && estadoActivo.toUpperCase() !== 'ACTIVO') return null;
