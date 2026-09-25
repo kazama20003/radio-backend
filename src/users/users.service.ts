@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import * as bcrypt from 'bcryptjs';
 import { Prisma } from '../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -61,10 +65,25 @@ export class UsersService {
   }
 
   async create(dto: CreateUserDto) {
-    const passwordHash = await bcrypt.hash(dto.password, 10);
-    const { password, ...rest } = dto;
+    const { password, email, operatorCode, ...rest } = dto;
+
+    // Personal sin correo: se identifica por DNI (operatorCode). El correo es
+    // sintético (solo para la restricción única) y la contraseña inicial es el
+    // DNI si no se indica otra.
+    if (!email && !operatorCode) {
+      throw new BadRequestException('Indica un correo o un DNI (código).');
+    }
+    const finalEmail = (email ?? `${operatorCode}@syemape.com`).toLowerCase();
+    const initialPassword = password ?? operatorCode;
+    if (!initialPassword || initialPassword.length < 6) {
+      throw new BadRequestException(
+        'La contraseña (o el DNI usado como contraseña) debe tener al menos 6 caracteres.',
+      );
+    }
+    const passwordHash = await bcrypt.hash(initialPassword, 10);
+
     return this.prisma.user.create({
-      data: { ...rest, passwordHash },
+      data: { ...rest, email: finalEmail, operatorCode, passwordHash },
       select: publicSelect,
     });
   }

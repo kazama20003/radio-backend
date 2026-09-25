@@ -7,7 +7,8 @@ import {
   Query,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { IngestPositionDto } from './dto/tracking.dto';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { IngestPositionDto, IngestUserPositionDto } from './dto/tracking.dto';
 import { TrackingService } from './tracking.service';
 
 @ApiTags('tracking')
@@ -26,6 +27,21 @@ export class TrackingController {
   @Get('live')
   live() {
     return this.tracking.liveMap();
+  }
+
+  /** Reporte de posición del propio usuario autenticado (cualquier rol). */
+  @Post('me/position')
+  reportMyPosition(
+    @CurrentUser('id') userId: string,
+    @Body() dto: IngestUserPositionDto,
+  ) {
+    return this.tracking.ingestPresence(userId, dto);
+  }
+
+  /** Presencia en vivo: última posición de cada persona conectada. */
+  @Get('people')
+  people() {
+    return this.tracking.livePeople();
   }
 
   @Get('units/:unitId/history')

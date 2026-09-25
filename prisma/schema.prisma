@@ -136,6 +136,14 @@ model User {
   isActive      Boolean   @default(true)
   isOnline      Boolean   @default(false)
   lastSeenAt    DateTime?
+
+  // Última ubicación conocida del usuario (presencia en el mapa; todos los roles)
+  lastLat        Float?
+  lastLng        Float?
+  lastSpeedKmh   Float?
+  lastHeading    Float?
+  lastPositionAt DateTime?
+
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 

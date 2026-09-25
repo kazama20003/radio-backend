@@ -7,7 +7,7 @@ import {
 } from '../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AlertsService } from '../alerts/alerts.service';
-import { IngestPositionDto } from './dto/tracking.dto';
+import { IngestPositionDto, IngestUserPositionDto } from './dto/tracking.dto';
 import { TrackingGateway } from './tracking.gateway';
 
 // Límite de velocidad configurable por entorno (km/h). Default 90.
@@ -111,6 +111,62 @@ export class TrackingService {
     await this.evaluateRules(unit.id, unit.operatorId, speed, dto);
 
     return position;
+  }
+
+  /**
+   * Presencia del propio usuario (cualquier rol). Guarda su última ubicación y
+   * la emite en vivo para que el resto del equipo lo vea en el mapa.
+   */
+  async ingestPresence(userId: string, dto: IngestUserPositionDto) {
+    const recordedAt = dto.recordedAt ? new Date(dto.recordedAt) : new Date();
+    const speed = dto.speedKmh ?? 0;
+
+    const user = await this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        lastLat: dto.lat,
+        lastLng: dto.lng,
+        lastSpeedKmh: speed,
+        lastHeading: dto.heading,
+        lastPositionAt: recordedAt,
+        isOnline: true,
+        lastSeenAt: recordedAt,
+      },
+      select: {
+        id: true,
+        name: true,
+        nickname: true,
+        avatarKey: true,
+        role: true,
+        lastLat: true,
+        lastLng: true,
+        lastSpeedKmh: true,
+        lastHeading: true,
+        lastPositionAt: true,
+      },
+    });
+
+    this.gateway.emitPresence(user);
+    return user;
+  }
+
+  /** Presencia de todas las personas conectadas con ubicación conocida. */
+  async livePeople() {
+    return this.prisma.user.findMany({
+      where: { isActive: true, lastLat: { not: null } },
+      select: {
+        id: true,
+        name: true,
+        nickname: true,
+        avatarKey: true,
+        role: true,
+        lastLat: true,
+        lastLng: true,
+        lastSpeedKmh: true,
+        lastHeading: true,
+        lastPositionAt: true,
+      },
+    });
   }
 
   async history(unitId: string, limit = 100) {

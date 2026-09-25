@@ -48,4 +48,8 @@ export class TrackingGateway implements OnGatewayConnection {
   emitPosition(payload: unknown) {
     this.server.emit('position:update', payload);
   }
+
+  emitPresence(payload: unknown) {
+    this.server.emit('presence:update', payload);
+  }
 }

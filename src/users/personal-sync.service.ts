@@ -72,6 +72,7 @@ export class PersonalSyncService {
             where: { id: existing.id },
             data: {
               name: mapped.name,
+              nickname: mapped.nickname,
               positionTitle: mapped.positionTitle,
               phone: mapped.phone,
               role: mapped.role,
@@ -87,6 +88,7 @@ export class PersonalSyncService {
               email: mapped.email,
               operatorCode: mapped.operatorCode,
               name: mapped.name,
+              nickname: mapped.nickname,
               positionTitle: mapped.positionTitle,
               phone: mapped.phone,
               role: mapped.role,
@@ -143,6 +145,7 @@ export class PersonalSyncService {
   private mapRecord(r: PersonalRecord): {
     operatorCode: string;
     name: string;
+    nickname?: string;
     email: string;
     positionTitle?: string;
     phone?: string;
@@ -163,25 +166,37 @@ export class PersonalSyncService {
       this.str(r, ['nombreCompleto', 'name']) ??
       `${nombres} ${apellidos}`.trim();
 
+    // El personal no tiene correo: se genera uno sintético solo para cumplir la
+    // restricción única. El login real es por DNI (operatorCode) + contraseña.
     const email =
       this.str(r, ['email', 'correo', 'correoElectronico']) ??
       `${dni}@syemape.com`;
 
+    const nickname = this.str(r, ['apelativo', 'nickname', 'indicativo']);
     const cargo = this.str(r, ['cargo', 'positionTitle', 'puesto']);
     const phone = this.str(r, ['telefono', 'celular', 'phone']);
+    const rolSugerido = this.str(r, ['rolSugerido', 'tipo']);
 
     return {
       operatorCode: dni,
       name: fullName || dni,
+      nickname,
       email: email.toLowerCase(),
       positionTitle: cargo,
       phone,
-      role: this.roleFromCargo(cargo),
+      role: this.mapRole(rolSugerido, cargo),
     };
   }
 
-  /** Todos los importados son operadores salvo que el cargo indique otra cosa. */
-  private roleFromCargo(cargo?: string): Role {
+  /**
+   * Prioriza `rolSugerido`/`tipo` que envía RRHH; si no viene, infiere del cargo.
+   * ADMIN nunca se asigna automáticamente (se gestiona manualmente).
+   */
+  private mapRole(rolSugerido?: string, cargo?: string): Role {
+    const r = (rolSugerido ?? '').toUpperCase();
+    if (r.includes('SUPERVISOR') || r === 'SUP') return Role.SUPERVISOR;
+    if (r.includes('OPERADOR') || r.includes('OPERATOR') || r === 'OPE')
+      return Role.OPERATOR;
     const c = (cargo ?? '').toUpperCase();
     if (c.includes('SUPERVISOR') || c.includes('JEFE')) return Role.SUPERVISOR;
     return Role.OPERATOR;

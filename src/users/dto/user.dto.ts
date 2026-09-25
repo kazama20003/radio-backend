@@ -9,12 +9,16 @@ import {
 import { Role, Shift } from '../../generated/prisma/client';
 
 export class CreateUserDto {
+  // El personal accede por DNI (operatorCode); solo el admin usa correo. Por eso
+  // email y password son opcionales: si faltan, se derivan del DNI en el servicio.
+  @IsOptional()
   @IsEmail()
-  email!: string;
+  email?: string;
 
+  @IsOptional()
   @IsString()
   @MinLength(6)
-  password!: string;
+  password?: string;
 
   @IsString()
   name!: string;
