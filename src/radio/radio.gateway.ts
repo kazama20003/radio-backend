@@ -218,6 +218,26 @@ export class RadioGateway implements OnGatewayConnection, OnGatewayDisconnect {
     return { ok: true, transmission };
   }
 
+  /** Enviar un mensaje de texto al chat del canal. */
+  @SubscribeMessage('channel:text')
+  async onChannelText(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { channelId: string; text: string },
+  ) {
+    const user = client.data.user;
+    const text = (data?.text ?? '').trim();
+    if (!data?.channelId || !text) return { ok: false };
+    const transmission = await this.radio.recordText(
+      data.channelId,
+      user.id,
+      text.slice(0, 2000),
+    );
+    this.server
+      .to(`channel:${data.channelId}`)
+      .emit('channel:post', { channelId: data.channelId, transmission });
+    return { ok: true, transmission };
+  }
+
   /** Cancelar la solicitud: sale de la cola sin haber hablado. */
   @SubscribeMessage('ptt:cancel')
   onPttCancel(

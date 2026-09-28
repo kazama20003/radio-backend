@@ -93,6 +93,15 @@ export class RadioService {
     });
   }
 
+  /** Guarda un mensaje de texto en el chat del canal. */
+  async recordText(channelId: string, senderId: string, text: string) {
+    await this.ensureChannel(channelId);
+    return this.prisma.radioTransmission.create({
+      data: { channelId, senderId, text },
+      include: { sender: senderSelect },
+    });
+  }
+
   /**
    * Notifica por push a los miembros del canal que una transmisión terminó.
    * Excluye al emisor y a quienes están escuchando en vivo (`excludeUserIds`),
