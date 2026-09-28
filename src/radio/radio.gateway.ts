@@ -11,10 +11,22 @@ import {
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
 import type * as mediasoup from 'mediasoup';
+import { type ChildProcess, spawn } from 'child_process';
+import { writeFileSync } from 'fs';
+import { join } from 'path';
 import { authenticateSocket } from '../common/ws/ws-auth.util';
+import { UPLOAD_DIR } from '../media/media.controller';
 import { MediasoupService } from './mediasoup.service';
 import { RadioFloorService } from './radio-floor.service';
 import { RadioService } from './radio.service';
+
+/** Grabación en curso de una transmisión. */
+interface MsRecording {
+  ffmpeg: ChildProcess;
+  transport: mediasoup.types.PlainTransport;
+  file: string; // key /uploads/xxx
+  startedAt: number;
+}
 
 /** Estado mediasoup por conexión (socket). */
 interface MsPeer {
@@ -23,6 +35,15 @@ interface MsPeer {
   recvTransport?: mediasoup.types.WebRtcTransport;
   producer?: mediasoup.types.Producer;
   consumers: Map<string, mediasoup.types.Consumer>;
+  recording?: MsRecording;
+}
+
+/** Puerto UDP rotatorio para el RTP de grabación (ffmpeg). */
+let recPortCounter = 41000;
+function nextRecPort() {
+  recPortCounter += 2;
+  if (recPortCounter > 41998) recPortCounter = 41000;
+  return recPortCounter;
 }
 
 /**
@@ -386,7 +407,80 @@ export class RadioGateway implements OnGatewayConnection, OnGatewayDisconnect {
     client
       .to(`channel:${data.channelId}`)
       .emit('ms:newProducer', { producerId: producer.id, socketId: client.id });
+    // Grabar en el servidor (ffmpeg) para guardar la nota al terminar.
+    void this.startRecording(client, producer.id, data.channelId);
     return { id: producer.id };
+  }
+
+  /** Arranca ffmpeg para grabar el audio del producer (best-effort). */
+  private async startRecording(
+    client: Socket,
+    producerId: string,
+    channelId: string,
+  ) {
+    try {
+      const port = nextRecPort();
+      const rec = await this.ms.createRecordingConsumer(producerId, port);
+      const filename = `radio-${Date.now()}-${Math.round(Math.random() * 1e6)}.m4a`;
+      const filepath = join(UPLOAD_DIR, filename);
+      const sdpPath = join(UPLOAD_DIR, `${filename}.sdp`);
+      const sdp =
+        `v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\ns=mape\r\nc=IN IP4 127.0.0.1\r\n` +
+        `t=0 0\r\nm=audio ${port} RTP/AVP ${rec.payloadType}\r\n` +
+        `a=rtpmap:${rec.payloadType} opus/${rec.clockRate}/${rec.channels}\r\na=recvonly\r\n`;
+      writeFileSync(sdpPath, sdp);
+      const ffmpeg = spawn('ffmpeg', [
+        '-protocol_whitelist',
+        'file,udp,rtp',
+        '-i',
+        sdpPath,
+        '-c:a',
+        'aac',
+        '-y',
+        filepath,
+      ]);
+      await rec.consumer.resume(); // empieza a fluir RTP hacia ffmpeg
+      this.peer(client).recording = {
+        ffmpeg,
+        transport: rec.transport,
+        file: `/uploads/${filename}`,
+        startedAt: Date.now(),
+      };
+    } catch {
+      // si la grabación falla, la transmisión en vivo sigue funcionando
+    }
+  }
+
+  /** Detiene ffmpeg y guarda la nota de voz en el chat del canal. */
+  private finishRecording(client: Socket, channelId: string) {
+    const p = this.msPeers.get(client.id);
+    const rec = p?.recording;
+    if (!rec || !p) return;
+    p.recording = undefined;
+    const durationSec = Math.max(0.5, (Date.now() - rec.startedAt) / 1000);
+    try {
+      rec.ffmpeg.kill('SIGINT');
+    } catch {
+      /* noop */
+    }
+    try {
+      rec.transport.close();
+    } catch {
+      /* noop */
+    }
+    const userId = client.data.user?.id as string | undefined;
+    if (!userId) return;
+    // Damos un momento a ffmpeg para cerrar el archivo antes de guardar.
+    setTimeout(() => {
+      void this.radio
+        .recordTransmission(channelId, userId, { audioKey: rec.file, durationSec })
+        .then((transmission) => {
+          this.server
+            .to(`channel:${channelId}`)
+            .emit('ptt:ended', { channelId, transmission });
+        })
+        .catch(() => undefined);
+    }, 900);
   }
 
   /** Consumir el audio de un producer (escuchar en vivo). */
@@ -447,6 +541,7 @@ export class RadioGateway implements OnGatewayConnection, OnGatewayDisconnect {
     this.server
       .to(`channel:${channelId}`)
       .emit('ms:producerClosed', { channelId });
+    this.finishRecording(client, channelId); // detiene ffmpeg y guarda la nota
   }
 
   private cleanupMsPeer(client: Socket) {

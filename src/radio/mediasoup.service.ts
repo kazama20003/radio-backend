@@ -109,4 +109,33 @@ export class MediasoupService implements OnModuleInit {
   canConsume(producerId: string, rtpCapabilities: mediasoup.types.RtpCapabilities) {
     return this.router.canConsume({ producerId, rtpCapabilities });
   }
+
+  /**
+   * Prepara la grabación de un producer: crea un PlainTransport que envía el RTP
+   * del audio a un puerto UDP local (donde escuchará ffmpeg). Devuelve el
+   * transporte, el consumer (pausado) y los datos para armar el SDP de ffmpeg.
+   */
+  async createRecordingConsumer(producerId: string, rtpPort: number) {
+    const transport = await this.router.createPlainTransport({
+      listenIp: { ip: '127.0.0.1' },
+      rtcpMux: true,
+      comedia: false,
+    });
+    // Envía el RTP al puerto local donde ffmpeg estará escuchando.
+    await transport.connect({ ip: '127.0.0.1', port: rtpPort });
+    const consumer = await transport.consume({
+      producerId,
+      rtpCapabilities: this.router.rtpCapabilities,
+      paused: true,
+    });
+    const codec = consumer.rtpParameters.codecs[0];
+    return {
+      transport,
+      consumer,
+      payloadType: codec.payloadType,
+      clockRate: codec.clockRate,
+      channels: codec.channels ?? 2,
+      ssrc: consumer.rtpParameters.encodings?.[0]?.ssrc,
+    };
+  }
 }
