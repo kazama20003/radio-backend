@@ -198,6 +198,26 @@ export class RadioGateway implements OnGatewayConnection, OnGatewayDisconnect {
     return { released: true, transmission };
   }
 
+  /** Compartir una imagen en el canal (chat del canal: audios + imágenes). */
+  @SubscribeMessage('channel:image')
+  async onChannelImage(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { channelId: string; imageKey: string },
+  ) {
+    const user = client.data.user;
+    if (!data?.channelId || !data?.imageKey) return { ok: false };
+    const transmission = await this.radio.recordImage(
+      data.channelId,
+      user.id,
+      data.imageKey,
+    );
+    // Avisa a todo el canal (incluido el emisor) para actualizar el chat en vivo.
+    this.server
+      .to(`channel:${data.channelId}`)
+      .emit('channel:post', { channelId: data.channelId, transmission });
+    return { ok: true, transmission };
+  }
+
   /** Cancelar la solicitud: sale de la cola sin haber hablado. */
   @SubscribeMessage('ptt:cancel')
   onPttCancel(

@@ -1,13 +1,21 @@
 import {
   Injectable,
+  Logger,
   NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { AccessToken } from 'livekit-server-sdk';
+import { unlink } from 'fs/promises';
+import { join } from 'path';
 import { Prisma } from '../generated/prisma/client';
+import { UPLOAD_DIR } from '../media/media.controller';
 import { PushService } from '../notifications/push.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateChannelDto, TransmissionDto } from './dto/radio.dto';
+
+/** Días que se conservan los audios de radio antes de borrarse automáticamente. */
+const AUDIO_RETENTION_DAYS = 7;
 
 const senderSelect = {
   select: { id: true, name: true, nickname: true, avatarKey: true },
@@ -72,6 +80,15 @@ export class RadioService {
         audioKey: dto.audioKey,
         durationSec: dto.durationSec,
       },
+      include: { sender: senderSelect },
+    });
+  }
+
+  /** Guarda una imagen compartida en el canal (chat del canal). */
+  async recordImage(channelId: string, senderId: string, imageKey: string) {
+    await this.ensureChannel(channelId);
+    return this.prisma.radioTransmission.create({
+      data: { channelId, senderId, imageKey },
       include: { sender: senderSelect },
     });
   }
@@ -160,5 +177,39 @@ export class RadioService {
   private async ensureChannel(id: string) {
     const channel = await this.prisma.channel.findUnique({ where: { id } });
     if (!channel) throw new NotFoundException('Canal no encontrado');
+  }
+
+  private readonly logger = new Logger(RadioService.name);
+
+  /**
+   * Limpieza automática: borra las transmisiones (y sus archivos de audio) con
+   * más de AUDIO_RETENTION_DAYS días. Se ejecuta a diario de madrugada.
+   */
+  @Cron(CronExpression.EVERY_DAY_AT_3AM)
+  async purgeOldTransmissions() {
+    const cutoff = new Date(Date.now() - AUDIO_RETENTION_DAYS * 24 * 60 * 60 * 1000);
+    const old = await this.prisma.radioTransmission.findMany({
+      where: { createdAt: { lt: cutoff } },
+      select: { id: true, audioKey: true },
+    });
+    if (old.length === 0) return;
+
+    // Borra los archivos de audio del disco (si existen).
+    for (const t of old) {
+      if (!t.audioKey) continue;
+      const filename = t.audioKey.replace(/^\/uploads\//, '');
+      try {
+        await unlink(join(UPLOAD_DIR, filename));
+      } catch {
+        // el archivo ya no existe: se ignora
+      }
+    }
+
+    const { count } = await this.prisma.radioTransmission.deleteMany({
+      where: { createdAt: { lt: cutoff } },
+    });
+    this.logger.log(
+      `Limpieza de radio: ${count} transmisiones de más de ${AUDIO_RETENTION_DAYS} días eliminadas.`,
+    );
   }
 }

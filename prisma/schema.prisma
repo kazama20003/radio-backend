@@ -343,6 +343,7 @@ model RadioTransmission {
   senderId    String
   sender      User     @relation(fields: [senderId], references: [id], onDelete: Cascade)
   audioKey    String? // key en storage (grabación PTT)
+  imageKey    String? // key en storage (imagen compartida en el canal)
   durationSec Float    @default(0)
   createdAt   DateTime @default(now())
 
