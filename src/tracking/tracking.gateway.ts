@@ -33,6 +33,14 @@ export class TrackingGateway implements OnGatewayConnection {
       return;
     }
     client.data.user = user;
+    // Sala por usuario: permite expulsar las sesiones anteriores al hacer login
+    // en otro dispositivo con la misma cuenta (sesión única).
+    client.join(`user:${user.id}`);
+  }
+
+  /** Expulsa las sesiones (sockets) del usuario: usado al iniciar sesión en otro dispositivo. */
+  revokeUserSessions(userId: string) {
+    this.server.to(`user:${userId}`).emit('session:revoked');
   }
 
   /** El supervisor recibe las actualizaciones; el operador puede enviarlas por WS. */

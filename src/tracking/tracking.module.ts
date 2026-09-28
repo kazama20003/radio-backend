@@ -9,6 +9,6 @@ import { TrackingService } from './tracking.service';
   imports: [JwtModule.register({}), AlertsModule],
   controllers: [TrackingController],
   providers: [TrackingService, TrackingGateway],
-  exports: [TrackingService],
+  exports: [TrackingService, TrackingGateway],
 })
 export class TrackingModule {}

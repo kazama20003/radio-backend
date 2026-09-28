@@ -8,6 +8,7 @@ import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcryptjs';
 import { OtpPurpose, User } from '../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { TrackingGateway } from '../tracking/tracking.gateway';
 import {
   ForgotPasswordDto,
   LoginDto,
@@ -23,6 +24,7 @@ export class AuthService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwt: JwtService,
+    private readonly tracking: TrackingGateway,
   ) {}
 
   // ── Registro (admin/supervisor crea operadores) ──────────────
@@ -59,6 +61,14 @@ export class AuthService {
 
     const ok = await bcrypt.compare(dto.password, user.passwordHash);
     if (!ok) throw new UnauthorizedException('Credenciales inválidas');
+
+    // Sesión única: invalida las sesiones anteriores de esta cuenta y expulsa al
+    // dispositivo previo (evita el marcador "saltando" y bugs con 2 sockets).
+    await this.prisma.refreshToken.updateMany({
+      where: { userId: user.id, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+    this.tracking.revokeUserSessions(user.id);
 
     await this.prisma.user.update({
       where: { id: user.id },
