@@ -135,6 +135,19 @@ export class ChatService {
 
     this.gateway.emitMessage(conversationId, message);
 
+    // Avisa a cada destinatario en su sala personal para que la lista de chats
+    // y el badge de no leídos se actualicen en vivo, y para que la app pueda
+    // mostrar una notificación local aunque no tengan la conversación abierta.
+    const preview = this.previewFor(message.type, message.body);
+    for (const m of members) {
+      this.gateway.emitConversationUpdated(m.userId, {
+        conversationId,
+        messageId: message.id,
+        title: message.sender?.name ?? 'Nuevo mensaje',
+        body: preview,
+      });
+    }
+
     // Push a los demás miembros (fire-and-forget).
     if (members.length) {
       void this.push

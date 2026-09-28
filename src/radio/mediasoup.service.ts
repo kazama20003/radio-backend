@@ -104,4 +104,9 @@ export class MediasoupService implements OnModuleInit {
   get routerInstance() {
     return this.router;
   }
+
+  /** ¿El router puede enviar este producer a un cliente con estas capacidades? */
+  canConsume(producerId: string, rtpCapabilities: mediasoup.types.RtpCapabilities) {
+    return this.router.canConsume({ producerId, rtpCapabilities });
+  }
 }

@@ -10,9 +10,20 @@ import {
   WebSocketServer,
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
+import type * as mediasoup from 'mediasoup';
 import { authenticateSocket } from '../common/ws/ws-auth.util';
+import { MediasoupService } from './mediasoup.service';
 import { RadioFloorService } from './radio-floor.service';
 import { RadioService } from './radio.service';
+
+/** Estado mediasoup por conexión (socket). */
+interface MsPeer {
+  channelId?: string;
+  sendTransport?: mediasoup.types.WebRtcTransport;
+  recvTransport?: mediasoup.types.WebRtcTransport;
+  producer?: mediasoup.types.Producer;
+  consumers: Map<string, mediasoup.types.Consumer>;
+}
 
 /**
  * Tamaño máximo de un mensaje de audio. El cliente envía el clip PTT completo
@@ -38,10 +49,19 @@ export class RadioGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer()
   server!: Server;
 
+  /** Estado mediasoup por socket.id. */
+  private readonly msPeers = new Map<string, MsPeer>();
+  /** Producer activo por canal (un hablante a la vez): channelId -> {socketId, producerId}. */
+  private readonly channelProducer = new Map<
+    string,
+    { socketId: string; producerId: string }
+  >();
+
   constructor(
     private readonly jwt: JwtService,
     private readonly radio: RadioService,
     private readonly floor: RadioFloorService,
+    private readonly ms: MediasoupService,
   ) {}
 
   async handleConnection(client: Socket) {
@@ -55,6 +75,7 @@ export class RadioGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   /** Al desconectar: libera la palabra o saca de la cola en cada canal afectado. */
   handleDisconnect(client: Socket) {
+    this.cleanupMsPeer(client); // libera transportes/producer/consumers de mediasoup
     const user = client.data.user;
     if (!user) return;
     const changes = this.floor.handleDisconnect(user.id);
@@ -294,6 +315,162 @@ export class RadioGateway implements OnGatewayConnection, OnGatewayDisconnect {
     this.server
       .to(data.toSocket)
       .emit('rtc:ice', { fromSocket: client.id, candidate: data.candidate });
+  }
+
+  // ── mediasoup (audio en vivo por SFU) ────────────────────────
+  private peer(client: Socket): MsPeer {
+    let p = this.msPeers.get(client.id);
+    if (!p) {
+      p = { consumers: new Map() };
+      this.msPeers.set(client.id, p);
+    }
+    return p;
+  }
+
+  @SubscribeMessage('ms:rtpCapabilities')
+  onRtpCapabilities() {
+    return this.ms.getRtpCapabilities();
+  }
+
+  /** Producer activo del canal (para que quien entra sepa a quién consumir). */
+  @SubscribeMessage('ms:getProducer')
+  onGetProducer(@MessageBody() data: { channelId: string }) {
+    return this.channelProducer.get(data.channelId) ?? null;
+  }
+
+  @SubscribeMessage('ms:createTransport')
+  async onCreateTransport(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { direction: 'send' | 'recv' },
+  ) {
+    const { transport, params } = await this.ms.createWebRtcTransport();
+    const p = this.peer(client);
+    if (data.direction === 'send') p.sendTransport = transport;
+    else p.recvTransport = transport;
+    return params;
+  }
+
+  @SubscribeMessage('ms:connectTransport')
+  async onConnectTransport(
+    @ConnectedSocket() client: Socket,
+    @MessageBody()
+    data: { direction: 'send' | 'recv'; dtlsParameters: mediasoup.types.DtlsParameters },
+  ) {
+    const p = this.peer(client);
+    const t = data.direction === 'send' ? p.sendTransport : p.recvTransport;
+    if (!t) return { error: 'sin transporte' };
+    await t.connect({ dtlsParameters: data.dtlsParameters });
+    return { connected: true };
+  }
+
+  /** Publicar el micrófono (empezar a hablar en vivo). */
+  @SubscribeMessage('ms:produce')
+  async onProduce(
+    @ConnectedSocket() client: Socket,
+    @MessageBody()
+    data: { channelId: string; rtpParameters: mediasoup.types.RtpParameters },
+  ) {
+    const p = this.peer(client);
+    if (!p.sendTransport) return { error: 'sin transporte de envío' };
+    const producer = await p.sendTransport.produce({
+      kind: 'audio',
+      rtpParameters: data.rtpParameters,
+    });
+    p.producer = producer;
+    p.channelId = data.channelId;
+    this.channelProducer.set(data.channelId, {
+      socketId: client.id,
+      producerId: producer.id,
+    });
+    // Avisar al canal que hay un nuevo hablante en vivo.
+    client
+      .to(`channel:${data.channelId}`)
+      .emit('ms:newProducer', { producerId: producer.id, socketId: client.id });
+    return { id: producer.id };
+  }
+
+  /** Consumir el audio de un producer (escuchar en vivo). */
+  @SubscribeMessage('ms:consume')
+  async onConsume(
+    @ConnectedSocket() client: Socket,
+    @MessageBody()
+    data: { producerId: string; rtpCapabilities: mediasoup.types.RtpCapabilities },
+  ) {
+    const p = this.peer(client);
+    if (!p.recvTransport) return { error: 'sin transporte de recepción' };
+    if (!this.ms.canConsume(data.producerId, data.rtpCapabilities)) {
+      return { error: 'no se puede consumir' };
+    }
+    const consumer = await p.recvTransport.consume({
+      producerId: data.producerId,
+      rtpCapabilities: data.rtpCapabilities,
+      paused: true,
+    });
+    p.consumers.set(consumer.id, consumer);
+    return {
+      id: consumer.id,
+      producerId: data.producerId,
+      kind: consumer.kind,
+      rtpParameters: consumer.rtpParameters,
+    };
+  }
+
+  @SubscribeMessage('ms:resume')
+  async onResume(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { consumerId: string },
+  ) {
+    const c = this.peer(client).consumers.get(data.consumerId);
+    if (c) await c.resume();
+    return { resumed: !!c };
+  }
+
+  /** Dejar de hablar: cierra el producer y avisa al canal. */
+  @SubscribeMessage('ms:closeProducer')
+  onCloseProducer(@ConnectedSocket() client: Socket) {
+    this.closeMsProducer(client);
+    return { closed: true };
+  }
+
+  private closeMsProducer(client: Socket) {
+    const p = this.msPeers.get(client.id);
+    if (!p?.producer || !p.channelId) return;
+    const channelId = p.channelId;
+    try {
+      p.producer.close();
+    } catch {
+      /* noop */
+    }
+    p.producer = undefined;
+    const active = this.channelProducer.get(channelId);
+    if (active?.socketId === client.id) this.channelProducer.delete(channelId);
+    this.server
+      .to(`channel:${channelId}`)
+      .emit('ms:producerClosed', { channelId });
+  }
+
+  private cleanupMsPeer(client: Socket) {
+    this.closeMsProducer(client);
+    const p = this.msPeers.get(client.id);
+    if (!p) return;
+    p.consumers.forEach((c) => {
+      try {
+        c.close();
+      } catch {
+        /* noop */
+      }
+    });
+    try {
+      p.sendTransport?.close();
+    } catch {
+      /* noop */
+    }
+    try {
+      p.recvTransport?.close();
+    } catch {
+      /* noop */
+    }
+    this.msPeers.delete(client.id);
   }
 
   /** Cancelar la solicitud: sale de la cola sin haber hablado. */

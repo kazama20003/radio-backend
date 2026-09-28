@@ -73,4 +73,13 @@ export class ChatGateway implements OnGatewayConnection {
   emitMessage(conversationId: string, message: unknown) {
     this.server.to(`conversation:${conversationId}`).emit('message:new', message);
   }
+
+  /**
+   * Avisa a la sala personal del usuario que una conversación cambió, para
+   * refrescar la lista de chats y el badge de no leídos aunque no la tenga
+   * abierta.
+   */
+  emitConversationUpdated(userId: string, payload: unknown) {
+    this.server.to(`user:${userId}`).emit('conversation:updated', payload);
+  }
 }
