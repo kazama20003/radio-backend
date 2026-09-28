@@ -238,6 +238,64 @@ export class RadioGateway implements OnGatewayConnection, OnGatewayDisconnect {
     return { ok: true, transmission };
   }
 
+  // ── WebRTC (audio en vivo) — señalización ────────────────────
+  // El socket solo REENVÍA los mensajes de señalización entre pares del canal.
+
+  /** El que habla avisa al canal que empezó a transmitir en vivo. */
+  @SubscribeMessage('rtc:speaking-start')
+  onRtcSpeakingStart(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { channelId: string },
+  ) {
+    client
+      .to(`channel:${data.channelId}`)
+      .emit('rtc:peer-speaking', { fromSocket: client.id });
+  }
+
+  /** El que habla avisa que terminó. */
+  @SubscribeMessage('rtc:speaking-stop')
+  onRtcSpeakingStop(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { channelId: string },
+  ) {
+    client
+      .to(`channel:${data.channelId}`)
+      .emit('rtc:peer-stopped', { fromSocket: client.id });
+  }
+
+  /** Reenvía una oferta SDP al socket destino. */
+  @SubscribeMessage('rtc:offer')
+  onRtcOffer(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { toSocket: string; sdp: unknown },
+  ) {
+    this.server
+      .to(data.toSocket)
+      .emit('rtc:offer', { fromSocket: client.id, sdp: data.sdp });
+  }
+
+  /** Reenvía una respuesta SDP al socket destino. */
+  @SubscribeMessage('rtc:answer')
+  onRtcAnswer(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { toSocket: string; sdp: unknown },
+  ) {
+    this.server
+      .to(data.toSocket)
+      .emit('rtc:answer', { fromSocket: client.id, sdp: data.sdp });
+  }
+
+  /** Reenvía un candidato ICE al socket destino. */
+  @SubscribeMessage('rtc:ice')
+  onRtcIce(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { toSocket: string; candidate: unknown },
+  ) {
+    this.server
+      .to(data.toSocket)
+      .emit('rtc:ice', { fromSocket: client.id, candidate: data.candidate });
+  }
+
   /** Cancelar la solicitud: sale de la cola sin haber hablado. */
   @SubscribeMessage('ptt:cancel')
   onPttCancel(
