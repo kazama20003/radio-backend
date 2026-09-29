@@ -393,6 +393,12 @@ export class RadioGateway implements OnGatewayConnection, OnGatewayDisconnect {
   ) {
     const p = this.peer(client);
     if (!p.sendTransport) return { error: 'sin transporte de envío' };
+    // Half-duplex: un solo hablante a la vez por canal. Si ya hay otro
+    // produciendo, se rechaza (el cliente debe esperar a que termine).
+    const busy = this.channelProducer.get(data.channelId);
+    if (busy && busy.socketId !== client.id) {
+      return { error: 'ocupado', busy: true };
+    }
     const producer = await p.sendTransport.produce({
       kind: 'audio',
       rtpParameters: data.rtpParameters,
