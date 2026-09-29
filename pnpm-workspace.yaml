@@ -4,25 +4,12 @@
 # `pnpm build` disparen un `pnpm install` que puede fallar en el servidor).
 verifyDepsBeforeRun: false
 
-# Paquetes cuyos scripts de build SÍ permitimos ejecutar.
-onlyBuiltDependencies:
-  - '@parcel/watcher'
-  - '@prisma/client'
-  - '@prisma/engines'
-  - esbuild
-  - prisma
-  - unrs-resolver
-
-# Paquetes cuyos scripts de build ignoramos a propósito (telemetría, opcionales).
-# Listarlos aquí evita el error ERR_PNPM_IGNORED_BUILDS.
-ignoredBuiltDependencies:
-  - '@scarf/scarf'
-
 allowBuilds:
-  '@parcel/watcher': set this to true or false
-  '@prisma/client': set this to true or false
-  '@prisma/engines': set this to true or false
-  esbuild: set this to true or false
-  mediasoup: set this to true or false
-  prisma: set this to true or false
-  unrs-resolver: set this to true or false
+  '@parcel/watcher': true
+  '@prisma/client': true
+  '@prisma/engines': true
+  '@scarf/scarf': true
+  esbuild: true
+  mediasoup: true
+  prisma: true
+  unrs-resolver: true
