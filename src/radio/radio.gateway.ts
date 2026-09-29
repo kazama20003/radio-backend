@@ -464,20 +464,12 @@ export class RadioGateway implements OnGatewayConnection, OnGatewayDisconnect {
     if (!rec || !p) return;
     p.recording = undefined;
     const durationSec = Math.max(0.5, (Date.now() - rec.startedAt) / 1000);
-    try {
-      rec.ffmpeg.kill('SIGINT');
-    } catch {
-      /* noop */
-    }
-    try {
-      rec.transport.close();
-    } catch {
-      /* noop */
-    }
     const userId = client.data.user?.id as string | undefined;
-    if (!userId) return;
-    // Damos un momento a ffmpeg para cerrar el archivo antes de guardar.
-    setTimeout(() => {
+
+    let saved = false;
+    const save = () => {
+      if (saved || !userId) return;
+      saved = true;
       void this.radio
         .recordTransmission(channelId, userId, { audioKey: rec.file, durationSec })
         .then((transmission) => {
@@ -486,7 +478,26 @@ export class RadioGateway implements OnGatewayConnection, OnGatewayDisconnect {
             .emit('ptt:ended', { channelId, transmission });
         })
         .catch(() => undefined);
-    }, 900);
+    };
+
+    // Guardar EN CUANTO ffmpeg cierre el archivo (rápido, sin espera fija). Un
+    // respaldo por si el proceso se cuelga.
+    const fallback = setTimeout(save, 2500);
+    rec.ffmpeg.once('close', () => {
+      clearTimeout(fallback);
+      save();
+    });
+
+    try {
+      rec.ffmpeg.kill('SIGINT'); // finaliza y cierra el archivo -> dispara 'close'
+    } catch {
+      /* noop */
+    }
+    try {
+      rec.transport.close();
+    } catch {
+      /* noop */
+    }
   }
 
   /** Consumir el audio de un producer (escuchar en vivo). */
