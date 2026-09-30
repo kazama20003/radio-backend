@@ -6,7 +6,10 @@ import {
   Patch,
   Post,
   Query,
+  UploadedFile,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -47,6 +50,16 @@ export class UsersController {
   @Patch('me')
   updateMe(@CurrentUser('id') id: string, @Body() dto: UpdateProfileDto) {
     return this.users.updateProfile(id, dto);
+  }
+
+  /** Sube/actualiza la foto de perfil (multipart, campo "file"). */
+  @Post('me/photo')
+  @UseInterceptors(FileInterceptor('file'))
+  uploadPhoto(
+    @CurrentUser('id') id: string,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    return this.users.setPhoto(id, file);
   }
 
   @Get()

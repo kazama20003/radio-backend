@@ -210,6 +210,7 @@ export class AuthService {
         shift: user.shift,
         positionTitle: user.positionTitle,
         avatarKey: user.avatarKey,
+        photoUrl: user.photoUrl,
       },
     };
   }

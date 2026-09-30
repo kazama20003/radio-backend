@@ -133,6 +133,7 @@ model User {
   positionTitle String? // cargo, p.ej. "Supervisor de operaciones"
   phone         String?
   avatarKey     String? // variante de avatar o key en storage
+  photoUrl      String? // URL de la foto de perfil (Cloudinary)
   isActive      Boolean   @default(true)
   isOnline      Boolean   @default(false)
   lastSeenAt    DateTime?

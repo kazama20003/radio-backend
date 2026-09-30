@@ -6,6 +6,7 @@ import {
 import * as bcrypt from 'bcryptjs';
 import { Prisma } from '../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { CloudinaryService } from '../common/cloudinary.service';
 import {
   CreateUserDto,
   ListUsersQueryDto,
@@ -23,6 +24,7 @@ const publicSelect = {
   positionTitle: true,
   phone: true,
   avatarKey: true,
+  photoUrl: true,
   operatorCode: true,
   isActive: true,
   isOnline: true,
@@ -32,7 +34,21 @@ const publicSelect = {
 
 @Injectable()
 export class UsersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly cloudinary: CloudinaryService,
+  ) {}
+
+  /** Sube la foto de perfil a Cloudinary y guarda la URL en el usuario. */
+  async setPhoto(id: string, file?: Express.Multer.File) {
+    if (!file?.buffer) throw new BadRequestException('Falta la imagen.');
+    const url = await this.cloudinary.uploadImage(file.buffer, file.originalname);
+    return this.prisma.user.update({
+      where: { id },
+      data: { photoUrl: url },
+      select: publicSelect,
+    });
+  }
 
   async findAll(query: ListUsersQueryDto) {
     const where: Prisma.UserWhereInput = {};
