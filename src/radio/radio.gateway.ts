@@ -117,6 +117,13 @@ export class RadioGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @MessageBody() channelId: string,
   ) {
     await this.radio.join(channelId, client.data.user.id);
+    // Salir de CUALQUIER otro canal antes de entrar: un socket solo debe estar
+    // en un canal a la vez, si no se cruzan el audio y el chat entre canales.
+    for (const room of client.rooms) {
+      if (room.startsWith('channel:') && room !== `channel:${channelId}`) {
+        client.leave(room);
+      }
+    }
     client.join(`channel:${channelId}`);
     // Estado actual del canal para el que acaba de entrar.
     const current = this.floor.current(channelId);
