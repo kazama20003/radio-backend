@@ -63,6 +63,17 @@ export class TrackingService {
     private readonly gateway: TrackingGateway,
   ) {}
 
+  /** Última posición conocida de un usuario (para calcular rutas). */
+  async userPosition(userId: string): Promise<{ lat: number; lng: number } | null> {
+    const u = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { lastLat: true, lastLng: true },
+    });
+    return u?.lastLat != null && u?.lastLng != null
+      ? { lat: u.lastLat, lng: u.lastLng }
+      : null;
+  }
+
   /** Registra una posición GPS, actualiza la unidad, emite en vivo y evalúa reglas. */
   async ingest(dto: IngestPositionDto) {
     const recordedAt = dto.recordedAt ? new Date(dto.recordedAt) : new Date();
