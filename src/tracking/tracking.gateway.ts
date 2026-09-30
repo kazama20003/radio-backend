@@ -67,10 +67,16 @@ export class TrackingGateway implements OnGatewayConnection {
     data: { targetUserId: string; dest: { lat: number; lng: number; name?: string } },
   ) {
     const user = client.data.user;
-    if (!user || (user.role !== 'ADMIN' && user.role !== 'SUPERVISOR')) {
+    if (!user) return { error: 'No autorizado.' };
+    if (!data?.targetUserId || !data?.dest) return { error: 'Datos incompletos.' };
+    // Guiarse a UNO MISMO lo puede hacer cualquiera; guiar a OTRO requiere rol.
+    if (
+      data.targetUserId !== user.id &&
+      user.role !== 'ADMIN' &&
+      user.role !== 'SUPERVISOR'
+    ) {
       return { error: 'No autorizado.' };
     }
-    if (!data?.targetUserId || !data?.dest) return { error: 'Datos incompletos.' };
     const origin = await this.tracking.userPosition(data.targetUserId);
     if (!origin) return { error: 'El usuario no tiene ubicación conocida.' };
     try {
