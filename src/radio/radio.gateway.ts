@@ -371,11 +371,38 @@ export class RadioGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: Socket,
     @MessageBody() data: { direction: 'send' | 'recv' },
   ) {
-    const { transport, params } = await this.ms.createWebRtcTransport();
     const p = this.peer(client);
-    if (data.direction === 'send') p.sendTransport = transport;
-    else p.recvTransport = transport;
-    return params;
+    // Cerrar el transporte anterior de esta dirección ANTES de crear otro. Si el
+    // cliente re-arma la sesión sin desconectarse (reconexión, watchdog cada 4s,
+    // o el reintento de HABLAR), el transporte viejo quedaba huérfano ocupando
+    // sus puertos UDP/TCP del rango RTC. Con solo ~101 puertos (40000-40100),
+    // unos pocos teléfonos reconectando agotaban el rango y createWebRtcTransport
+    // empezaba a fallar/colgarse -> en la app "No se puede transmitir" (txFailed).
+    const old = data.direction === 'send' ? p.sendTransport : p.recvTransport;
+    if (old) {
+      try {
+        old.close();
+      } catch {
+        /* noop */
+      }
+      if (data.direction === 'send') p.sendTransport = undefined;
+      else p.recvTransport = undefined;
+    }
+    try {
+      const { transport, params } = await this.ms.createWebRtcTransport();
+      if (data.direction === 'send') p.sendTransport = transport;
+      else p.recvTransport = transport;
+      return params;
+    } catch (e) {
+      // Sin puertos libres u otro fallo del worker: devolver error limpio en vez
+      // de dejar colgado el ack del cliente (esperaría 8s y reintentaría, lo que
+      // empeora la presión de puertos).
+      this.logger.error(
+        `createWebRtcTransport falló (${data.direction}): ` +
+          (e instanceof Error ? e.message : String(e)),
+      );
+      return { error: 'no se pudo crear el transporte' };
+    }
   }
 
   @SubscribeMessage('ms:connectTransport')
