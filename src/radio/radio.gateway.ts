@@ -98,6 +98,9 @@ export class RadioGateway implements OnGatewayConnection, OnGatewayDisconnect {
   handleDisconnect(client: Socket) {
     this.cleanupMsPeer(client); // libera transportes/producer/consumers de mediasoup
     const user = client.data.user;
+    // Actualiza conectados en vivo del canal que el usuario tenía abierto.
+    const openChannel = client.data.channelId as string | undefined;
+    if (openChannel) void this.emitPresence(openChannel);
     if (!user) return;
     const changes = this.floor.handleDisconnect(user.id);
     for (const change of changes) {
@@ -111,6 +114,16 @@ export class RadioGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }
   }
 
+  /** Cuenta sockets vivos en un canal y lo emite al canal (conectados en vivo). */
+  private async emitPresence(channelId: string) {
+    const count = (
+      await this.server.in(`channel:${channelId}`).fetchSockets()
+    ).length;
+    this.server
+      .to(`channel:${channelId}`)
+      .emit('channel:presence', { channelId, count });
+  }
+
   @SubscribeMessage('channel:join')
   async onJoin(
     @ConnectedSocket() client: Socket,
@@ -119,12 +132,18 @@ export class RadioGateway implements OnGatewayConnection, OnGatewayDisconnect {
     await this.radio.join(channelId, client.data.user.id);
     // Salir de CUALQUIER otro canal antes de entrar: un socket solo debe estar
     // en un canal a la vez, si no se cruzan el audio y el chat entre canales.
+    const left: string[] = [];
     for (const room of client.rooms) {
       if (room.startsWith('channel:') && room !== `channel:${channelId}`) {
         client.leave(room);
+        left.push(room.substring('channel:'.length));
       }
     }
     client.join(`channel:${channelId}`);
+    client.data.channelId = channelId;
+    // Conectados en vivo: actualiza el canal nuevo y los que acaba de dejar.
+    await this.emitPresence(channelId);
+    for (const cid of left) await this.emitPresence(cid);
     // Estado actual del canal para el que acaba de entrar.
     const current = this.floor.current(channelId);
     return {
@@ -135,12 +154,17 @@ export class RadioGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   @SubscribeMessage('channel:leave')
-  onLeave(@ConnectedSocket() client: Socket, @MessageBody() channelId: string) {
+  async onLeave(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() channelId: string,
+  ) {
     // Si tenía la palabra o estaba en cola, libera/limpia antes de salir.
     this.releaseIfSpeaker(channelId, client.data.user.id);
     this.floor.cancel(channelId, client.data.user.id);
     this.emitQueue(channelId);
     client.leave(`channel:${channelId}`);
+    if (client.data.channelId === channelId) client.data.channelId = undefined;
+    await this.emitPresence(channelId);
     return { left: channelId };
   }
 
