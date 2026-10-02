@@ -14,7 +14,7 @@ import type * as mediasoup from 'mediasoup';
 import { type ChildProcess, spawn } from 'child_process';
 import { statSync, writeFileSync } from 'fs';
 import { join } from 'path';
-import { authenticateSocket } from '../common/ws/ws-auth.util';
+import { authenticateSocket, type WsUser } from '../common/ws/ws-auth.util';
 import { UPLOAD_DIR } from '../media/media.controller';
 import { MediasoupService } from './mediasoup.service';
 import { RadioFloorService } from './radio-floor.service';
@@ -117,14 +117,26 @@ export class RadioGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }
   }
 
-  /** Cuenta sockets vivos en un canal y lo emite al canal (conectados en vivo). */
+  /**
+   * Usuarios ÚNICOS conectados en vivo a un canal (por socket) y los emite al
+   * canal, con id/nombre/alias para que el cliente muestre QUIÉN está conectado.
+   */
   private async emitPresence(channelId: string) {
-    const count = (
-      await this.server.in(`channel:${channelId}`).fetchSockets()
-    ).length;
+    const sockets = await this.server.in(`channel:${channelId}`).fetchSockets();
+    const byId = new Map<
+      string,
+      { id: string; name?: string; nickname?: string | null }
+    >();
+    for (const s of sockets) {
+      const u = s.data?.user as WsUser | undefined;
+      if (u?.id && !byId.has(u.id)) {
+        byId.set(u.id, { id: u.id, name: u.name, nickname: u.nickname });
+      }
+    }
+    const users = [...byId.values()];
     this.server
       .to(`channel:${channelId}`)
-      .emit('channel:presence', { channelId, count });
+      .emit('channel:presence', { channelId, count: users.length, users });
   }
 
   @SubscribeMessage('channel:join')
