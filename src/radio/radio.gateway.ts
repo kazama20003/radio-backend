@@ -493,7 +493,10 @@ export class RadioGateway implements OnGatewayConnection, OnGatewayDisconnect {
     try {
       const port = nextRecPort();
       const rec = await this.ms.createRecordingConsumer(producerId, port);
-      const filename = `radio-${Date.now()}-${Math.round(Math.random() * 1e6)}.m4a`;
+      // ADTS AAC (.aac): contenedor "streamable" que escribe el audio en el acto.
+      // (El .m4a/AAC solo finaliza el archivo al cerrar -> al revisar el tamaño
+      //  estaba en 0 bytes y la nota se descartaba.)
+      const filename = `radio-${Date.now()}-${Math.round(Math.random() * 1e6)}.aac`;
       const filepath = join(UPLOAD_DIR, filename);
       const sdpPath = join(UPLOAD_DIR, `${filename}.sdp`);
       const sdp =
@@ -508,6 +511,8 @@ export class RadioGateway implements OnGatewayConnection, OnGatewayDisconnect {
         sdpPath,
         '-c:a',
         'aac',
+        '-f',
+        'adts',
         '-y',
         filepath,
       ]);
