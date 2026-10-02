@@ -34,7 +34,7 @@ export class MediaController {
           cb(null, `${unique}${extname(file.originalname) || ''}`);
         },
       }),
-      limits: { fileSize: 25 * 1024 * 1024 }, // 25 MB
+      limits: { fileSize: 100 * 1024 * 1024 }, // 100 MB (fotos, notas de voz y VIDEO del chat)
     }),
   )
   upload(@UploadedFile() file?: Express.Multer.File) {

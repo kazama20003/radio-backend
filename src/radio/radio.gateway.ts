@@ -321,6 +321,44 @@ export class RadioGateway
     return { ok: true, transmission };
   }
 
+  /**
+   * Compartir un adjunto multimedia en el canal (imagen, video o archivo).
+   * El cliente sube el archivo por `POST /api/media/upload`, obtiene la `key`
+   * (`/uploads/...`) y envía este evento con `kind` + metadatos.
+   */
+  @SubscribeMessage('channel:media')
+  async onChannelMedia(
+    @ConnectedSocket() client: Socket,
+    @MessageBody()
+    data: {
+      channelId: string;
+      kind: 'image' | 'video' | 'file';
+      key: string;
+      fileName?: string;
+      fileSize?: number;
+      mimeType?: string;
+    },
+  ) {
+    const user = client.data.user;
+    const kind =
+      data?.kind === 'video' || data?.kind === 'file' ? data.kind : 'image';
+    if (!data?.channelId || !data?.key) return { ok: false };
+    const transmission = await this.radio.recordMedia(data.channelId, user.id, {
+      kind,
+      key: data.key,
+      fileName: data.fileName?.slice(0, 255),
+      fileSize:
+        typeof data.fileSize === 'number' && data.fileSize >= 0
+          ? Math.round(data.fileSize)
+          : undefined,
+      mimeType: data.mimeType?.slice(0, 120),
+    });
+    this.server
+      .to(`channel:${data.channelId}`)
+      .emit('channel:post', { channelId: data.channelId, transmission });
+    return { ok: true, transmission };
+  }
+
   /** Enviar un mensaje de texto al chat del canal. */
   @SubscribeMessage('channel:text')
   async onChannelText(

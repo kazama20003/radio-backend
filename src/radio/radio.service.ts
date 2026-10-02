@@ -87,6 +87,48 @@ export class RadioService {
     });
   }
 
+  /**
+   * Guarda un adjunto multimedia en el chat del canal (imagen, video o archivo).
+   * `kind` decide en qué columna se guarda la key; `fileName/fileSize/mimeType`
+   * son metadatos opcionales (útiles sobre todo para archivos genéricos).
+   */
+  async recordMedia(
+    channelId: string,
+    senderId: string,
+    media: {
+      kind: 'image' | 'video' | 'file';
+      key: string;
+      fileName?: string;
+      fileSize?: number;
+      mimeType?: string;
+    },
+  ) {
+    await this.ensureChannel(channelId);
+    const data: {
+      channelId: string;
+      senderId: string;
+      imageKey?: string;
+      videoKey?: string;
+      fileKey?: string;
+      fileName?: string;
+      fileSize?: number;
+      mimeType?: string;
+    } = {
+      channelId,
+      senderId,
+      fileName: media.fileName,
+      fileSize: media.fileSize,
+      mimeType: media.mimeType,
+    };
+    if (media.kind === 'image') data.imageKey = media.key;
+    else if (media.kind === 'video') data.videoKey = media.key;
+    else data.fileKey = media.key;
+    return this.prisma.radioTransmission.create({
+      data,
+      include: { sender: senderSelect },
+    });
+  }
+
   /** Guarda un mensaje de texto en el chat del canal. */
   async recordText(channelId: string, senderId: string, text: string) {
     await this.ensureChannel(channelId);
@@ -157,18 +199,26 @@ export class RadioService {
     const cutoff = new Date(Date.now() - AUDIO_RETENTION_DAYS * 24 * 60 * 60 * 1000);
     const old = await this.prisma.radioTransmission.findMany({
       where: { createdAt: { lt: cutoff } },
-      select: { id: true, audioKey: true },
+      select: {
+        id: true,
+        audioKey: true,
+        imageKey: true,
+        videoKey: true,
+        fileKey: true,
+      },
     });
     if (old.length === 0) return;
 
-    // Borra los archivos de audio del disco (si existen).
+    // Borra del disco los archivos adjuntos (audio, imagen, video, archivo) si existen.
     for (const t of old) {
-      if (!t.audioKey) continue;
-      const filename = t.audioKey.replace(/^\/uploads\//, '');
-      try {
-        await unlink(join(UPLOAD_DIR, filename));
-      } catch {
-        // el archivo ya no existe: se ignora
+      for (const key of [t.audioKey, t.imageKey, t.videoKey, t.fileKey]) {
+        if (!key) continue;
+        const filename = key.replace(/^\/uploads\//, '');
+        try {
+          await unlink(join(UPLOAD_DIR, filename));
+        } catch {
+          // el archivo ya no existe: se ignora
+        }
       }
     }
 

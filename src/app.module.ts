@@ -7,6 +7,7 @@ import { AuthModule } from './auth/auth.module';
 import { ChatModule } from './chat/chat.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
+import { MapsModule } from './maps/maps.module';
 import { MediaModule } from './media/media.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { PreferencesModule } from './preferences/preferences.module';
@@ -33,6 +34,7 @@ import { UsersModule } from './users/users.module';
     RadioModule,
     PreferencesModule,
     MediaModule,
+    MapsModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: JwtAuthGuard },

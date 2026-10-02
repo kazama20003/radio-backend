@@ -345,6 +345,11 @@ model RadioTransmission {
   sender      User     @relation(fields: [senderId], references: [id], onDelete: Cascade)
   audioKey    String? // key en storage (grabación PTT)
   imageKey    String? // key en storage (imagen compartida en el canal)
+  videoKey    String? // key en storage (video compartido en el canal)
+  fileKey     String? // key en storage (archivo genérico compartido)
+  fileName    String? // nombre original del archivo (para mostrar/descargar)
+  fileSize    Int? // tamaño en bytes del archivo adjunto
+  mimeType    String? // tipo MIME del adjunto (image/*, video/*, application/pdf, …)
   text        String? // mensaje de texto en el chat del canal
   durationSec Float    @default(0)
   createdAt   DateTime @default(now())
