@@ -1,11 +1,5 @@
-import {
-  Injectable,
-  Logger,
-  NotFoundException,
-  ServiceUnavailableException,
-} from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
-import { AccessToken } from 'livekit-server-sdk';
 import { unlink } from 'fs/promises';
 import { join } from 'path';
 import { Prisma } from '../generated/prisma/client';
@@ -145,42 +139,6 @@ export class RadioService {
       take: Math.min(limit, 200),
       include: { sender: senderSelect },
     });
-  }
-
-  /**
-   * Genera un token de acceso a LiveKit para que el usuario entre a la "sala"
-   * del canal y transmita/escuche audio PTT en tiempo real. El audio viaja por
-   * LiveKit, no por el WebSocket de señalización.
-   */
-  async createAccessToken(
-    channelId: string,
-    user: { id: string; email: string },
-  ) {
-    await this.ensureChannel(channelId);
-
-    const url = process.env.LIVEKIT_URL;
-    const apiKey = process.env.LIVEKIT_API_KEY;
-    const apiSecret = process.env.LIVEKIT_API_SECRET;
-    if (!url || !apiKey || !apiSecret) {
-      throw new ServiceUnavailableException(
-        'LiveKit no está configurado (define LIVEKIT_URL, LIVEKIT_API_KEY y LIVEKIT_API_SECRET).',
-      );
-    }
-
-    const room = `channel:${channelId}`;
-    const at = new AccessToken(apiKey, apiSecret, {
-      identity: user.id,
-      name: user.email,
-    });
-    at.addGrant({
-      room,
-      roomJoin: true,
-      canPublish: true,
-      canSubscribe: true,
-    });
-
-    const token = await at.toJwt();
-    return { url, room, token };
   }
 
   private async ensureChannel(id: string) {

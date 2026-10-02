@@ -8,7 +8,6 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
-import type { AuthUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { Role } from '../generated/prisma/client';
 import { CreateChannelDto } from './dto/radio.dto';
@@ -44,11 +43,5 @@ export class RadioController {
   @Get(':id/history')
   history(@Param('id') id: string, @Query('limit') limit?: string) {
     return this.radio.history(id, limit ? Number(limit) : 50);
-  }
-
-  /** Token de acceso LiveKit para transmitir/escuchar audio PTT en el canal. */
-  @Post(':id/token')
-  token(@Param('id') id: string, @CurrentUser() user: AuthUser) {
-    return this.radio.createAccessToken(id, user);
   }
 }
