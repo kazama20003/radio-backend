@@ -550,8 +550,12 @@ export class RadioGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
     let saved = false;
     const save = () => {
-      if (saved || !userId) return;
+      if (saved) return;
       saved = true;
+      if (!userId) {
+        this.logger.warn(`Nota de voz NO guardada: sin userId (socket ${client.id}).`);
+        return;
+      }
       // No guardar notas rotas: ffmpeg falló o el archivo quedó sin audio real.
       let size = 0;
       try {
@@ -569,11 +573,18 @@ export class RadioGateway implements OnGatewayConnection, OnGatewayDisconnect {
       void this.radio
         .recordTransmission(channelId, userId, { audioKey: rec.file, durationSec })
         .then((transmission) => {
+          this.logger.log(
+            `Nota de voz guardada (${size} bytes, ${durationSec.toFixed(1)}s) en canal ${channelId}.`,
+          );
           this.server
             .to(`channel:${channelId}`)
             .emit('ptt:ended', { channelId, transmission });
         })
-        .catch(() => undefined);
+        .catch((err) => {
+          this.logger.error(
+            `Error guardando la nota de voz en BD: ${(err as Error)?.message ?? String(err)}`,
+          );
+        });
     };
 
     // Guardar EN CUANTO ffmpeg cierre el archivo (rápido, sin espera fija). Un
