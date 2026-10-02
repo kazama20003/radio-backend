@@ -57,8 +57,17 @@ export class MediasoupService implements OnModuleInit {
         rtcMaxPort: maxPort,
         logLevel: 'warn',
       });
-      this.worker.on('died', () => {
-        this.logger.error('mediasoup worker murió; recreando worker+router…');
+      const pid = this.worker.pid;
+      this.worker.on('died', (error?: Error) => {
+        // Captura la CAUSA real: la señal distingue el motivo —
+        //   SIGSEGV/SIGABRT  -> el binario del worker crasheó (p.ej. prebuilt
+        //                       incompatible con la CPU del VPS)
+        //   SIGKILL (code null)-> lo mató el OOM killer del sistema (sin RAM)
+        //   SIGTERM           -> alguien/algo lo terminó
+        this.logger.error(
+          `mediasoup worker murió (pid=${pid}): ${error?.message ?? 'sin detalle del proceso'}. ` +
+            'Revisa la señal: SIGSEGV/SIGABRT=binario crashea, SIGKILL=OOM, SIGTERM=terminado.',
+        );
         this.ready = false;
         void this.recreateAfterDeath();
       });
@@ -79,20 +88,36 @@ export class MediasoupService implements OnModuleInit {
     }
   }
 
-  /** Recrea mediasoup tras la muerte del worker; si falla, reinicia el proceso. */
+  /**
+   * Recrea mediasoup tras la muerte del worker. Reintenta con backoff antes de
+   * rendirse: a veces el fallo inmediato tras una muerte es transitorio (el SO
+   * aún no liberó recursos), así que un par de reintentos evita tener que
+   * reiniciar todo el proceso (y que suba el contador de pm2).
+   */
   private async recreateAfterDeath() {
-    await this.createWorkerAndRouter();
-    if (this.ready) {
-      this.logger.log('mediasoup recreado; reiniciando sesiones de audio.');
-      try {
-        this.resetHandler?.();
-      } catch {
-        /* noop */
+    const delays = [250, 1000, 3000]; // ms entre intentos
+    for (let i = 0; i < delays.length; i++) {
+      await new Promise((r) => setTimeout(r, delays[i]));
+      await this.createWorkerAndRouter();
+      if (this.ready) {
+        this.logger.log(
+          `mediasoup recreado (intento ${i + 1}); reiniciando sesiones de audio.`,
+        );
+        try {
+          this.resetHandler?.();
+        } catch {
+          /* noop */
+        }
+        return;
       }
-    } else {
-      this.logger.error('No se pudo recrear mediasoup; reiniciando el proceso.');
-      process.exit(1);
+      this.logger.warn(
+        `No se pudo recrear mediasoup (intento ${i + 1}/${delays.length}); reintentando…`,
+      );
     }
+    this.logger.error(
+      'mediasoup no se recreó tras varios intentos; reiniciando el proceso.',
+    );
+    process.exit(1);
   }
 
   isReady() {
