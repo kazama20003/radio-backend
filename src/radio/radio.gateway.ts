@@ -12,7 +12,7 @@ import {
 import { Server, Socket } from 'socket.io';
 import type * as mediasoup from 'mediasoup';
 import { type ChildProcess, spawn } from 'child_process';
-import { writeFileSync } from 'fs';
+import { statSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { authenticateSocket } from '../common/ws/ws-auth.util';
 import { UPLOAD_DIR } from '../media/media.controller';
@@ -25,7 +25,10 @@ interface MsRecording {
   ffmpeg: ChildProcess;
   transport: mediasoup.types.PlainTransport;
   file: string; // key /uploads/xxx
+  filepath: string; // ruta absoluta en disco (para verificar que se grabó audio)
   startedAt: number;
+  failed?: boolean; // ffmpeg no arrancó / falló
+  stderr?: string; // últimas líneas de stderr para diagnóstico
 }
 
 /** Estado mediasoup por conexión (socket). */
@@ -508,15 +511,31 @@ export class RadioGateway implements OnGatewayConnection, OnGatewayDisconnect {
         '-y',
         filepath,
       ]);
-      await rec.consumer.resume(); // empieza a fluir RTP hacia ffmpeg
-      this.peer(client).recording = {
+      const recording: MsRecording = {
         ffmpeg,
         transport: rec.transport,
         file: `/uploads/${filename}`,
+        filepath,
         startedAt: Date.now(),
       };
-    } catch {
+      // CRÍTICO: sin este handler, si ffmpeg no está instalado el evento 'error'
+      // (ENOENT) sube como excepción no capturada y TUMBA el backend (reinicios).
+      ffmpeg.on('error', (err) => {
+        recording.failed = true;
+        this.logger.error(
+          `ffmpeg no se pudo ejecutar; instálalo en el servidor ('apt install -y ffmpeg'): ${err.message}`,
+        );
+      });
+      ffmpeg.stderr?.on('data', (d: Buffer) => {
+        recording.stderr = ((recording.stderr ?? '') + d.toString()).slice(-2000);
+      });
+      this.peer(client).recording = recording;
+      await rec.consumer.resume(); // empieza a fluir RTP hacia ffmpeg
+    } catch (err) {
       // si la grabación falla, la transmisión en vivo sigue funcionando
+      this.logger.error(
+        `No se pudo iniciar la grabación de voz: ${(err as Error).message}`,
+      );
     }
   }
 
@@ -533,6 +552,20 @@ export class RadioGateway implements OnGatewayConnection, OnGatewayDisconnect {
     const save = () => {
       if (saved || !userId) return;
       saved = true;
+      // No guardar notas rotas: ffmpeg falló o el archivo quedó sin audio real.
+      let size = 0;
+      try {
+        size = statSync(rec.filepath).size;
+      } catch {
+        size = 0;
+      }
+      if (rec.failed || size < 800) {
+        this.logger.warn(
+          `Nota de voz descartada (failed=${rec.failed ?? false}, size=${size} bytes).` +
+            (rec.stderr ? ` ffmpeg: ${rec.stderr.slice(-300)}` : ''),
+        );
+        return;
+      }
       void this.radio
         .recordTransmission(channelId, userId, { audioKey: rec.file, durationSec })
         .then((transmission) => {

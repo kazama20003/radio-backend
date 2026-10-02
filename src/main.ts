@@ -26,6 +26,17 @@ class AudioIoAdapter extends IoAdapter {
   }
 }
 
+// Red de seguridad: un error asíncrono suelto (p. ej. un proceso hijo ffmpeg que
+// falla) no debe tumbar todo el backend. Se registra y el servicio sigue vivo.
+process.on('uncaughtException', (err) => {
+  // eslint-disable-next-line no-console
+  console.error('[uncaughtException]', err);
+});
+process.on('unhandledRejection', (reason) => {
+  // eslint-disable-next-line no-console
+  console.error('[unhandledRejection]', reason);
+});
+
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
 
