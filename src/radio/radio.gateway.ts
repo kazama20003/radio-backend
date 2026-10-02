@@ -511,6 +511,8 @@ export class RadioGateway implements OnGatewayConnection, OnGatewayDisconnect {
         sdpPath,
         '-c:a',
         'aac',
+        '-flush_packets',
+        '1', // vuelca cada paquete a disco al instante (no lo retiene en búfer)
         '-f',
         'adts',
         '-y',
@@ -597,18 +599,19 @@ export class RadioGateway implements OnGatewayConnection, OnGatewayDisconnect {
     //  audio en su búfer y el archivo estaba en 0 bytes -> la nota se descartaba
     //  aunque luego ffmpeg escribiera el archivo completo.)
     rec.ffmpeg.once('close', save);
-    // Si el SIGINT no cierra ffmpeg en 6s, lo forzamos (ADTS deja un archivo
-    // usable); el 'close' resultante dispara save.
+    // Con -flush_packets el archivo ya está completo en disco, así que si el
+    // SIGINT no cierra ffmpeg rápido lo forzamos a los 2s (no se pierde audio);
+    // el 'close' resultante dispara save.
     const killTimer = setTimeout(() => {
       try {
         rec.ffmpeg.kill('SIGKILL');
       } catch {
         /* noop */
       }
-    }, 6000);
+    }, 2000);
     rec.ffmpeg.once('close', () => clearTimeout(killTimer));
     // Último recurso por si 'close' nunca llega.
-    setTimeout(save, 8000);
+    setTimeout(save, 4000);
 
     try {
       rec.ffmpeg.kill('SIGINT'); // pide finalizar y cerrar el archivo -> 'close'
