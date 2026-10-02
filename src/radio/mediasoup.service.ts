@@ -35,10 +35,22 @@ export class MediasoupService implements OnModuleInit {
   ];
 
   private ready = false;
+  /** Lo invoca el gateway: se llama cuando mediasoup se recrea tras morir el
+   *  worker, para que los clientes reconstruyan sus transportes. */
+  private resetHandler?: () => void;
+  onReset(handler: () => void) {
+    this.resetHandler = handler;
+  }
 
   async onModuleInit() {
+    await this.createWorkerAndRouter();
+  }
+
+  /** Crea (o recrea) el worker + router. Resiliente: si el worker muere, se
+   *  recrea sin tumbar todo el proceso. */
+  private async createWorkerAndRouter() {
     const minPort = Number(process.env.MEDIASOUP_RTC_MIN_PORT ?? 40000);
-    const maxPort = Number(process.env.MEDIASOUP_RTC_MAX_PORT ?? 40100);
+    const maxPort = Number(process.env.MEDIASOUP_RTC_MAX_PORT ?? 40999);
     try {
       this.worker = await mediasoup.createWorker({
         rtcMinPort: minPort,
@@ -46,8 +58,9 @@ export class MediasoupService implements OnModuleInit {
         logLevel: 'warn',
       });
       this.worker.on('died', () => {
-        this.logger.error('mediasoup worker murió; reiniciando el proceso.');
-        process.exit(1);
+        this.logger.error('mediasoup worker murió; recreando worker+router…');
+        this.ready = false;
+        void this.recreateAfterDeath();
       });
       this.router = await this.worker.createRouter({
         mediaCodecs: MediasoupService.MEDIA_CODECS,
@@ -57,11 +70,28 @@ export class MediasoupService implements OnModuleInit {
     } catch (e) {
       // Si el worker no está compilado (falta pnpm approve-builds) NO tumbamos
       // el backend: la app sigue funcionando sin audio en vivo.
+      this.ready = false;
       this.logger.error(
         'mediasoup NO inició (¿falta compilar el worker? pnpm approve-builds). ' +
           'El backend sigue arriba sin audio en vivo. Detalle: ' +
           (e instanceof Error ? e.message : String(e)),
       );
+    }
+  }
+
+  /** Recrea mediasoup tras la muerte del worker; si falla, reinicia el proceso. */
+  private async recreateAfterDeath() {
+    await this.createWorkerAndRouter();
+    if (this.ready) {
+      this.logger.log('mediasoup recreado; reiniciando sesiones de audio.');
+      try {
+        this.resetHandler?.();
+      } catch {
+        /* noop */
+      }
+    } else {
+      this.logger.error('No se pudo recrear mediasoup; reiniciando el proceso.');
+      process.exit(1);
     }
   }
 

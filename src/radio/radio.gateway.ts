@@ -5,6 +5,7 @@ import {
   MessageBody,
   OnGatewayConnection,
   OnGatewayDisconnect,
+  OnGatewayInit,
   SubscribeMessage,
   WebSocketGateway,
   WebSocketServer,
@@ -67,7 +68,9 @@ const MAX_CHUNK_BYTES = 4 * 1024 * 1024; // 4 MB
   // El audio PTT viaja como base64 en un solo mensaje; ampliamos el buffer.
   maxHttpBufferSize: 6 * 1024 * 1024, // 6 MB
 })
-export class RadioGateway implements OnGatewayConnection, OnGatewayDisconnect {
+export class RadioGateway
+  implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect
+{
   private readonly logger = new Logger(RadioGateway.name);
 
   @WebSocketServer()
@@ -87,6 +90,18 @@ export class RadioGateway implements OnGatewayConnection, OnGatewayDisconnect {
     private readonly floor: RadioFloorService,
     private readonly ms: MediasoupService,
   ) {}
+
+  afterInit() {
+    // Si mediasoup se recrea tras morir el worker, limpiamos el estado de audio
+    // y forzamos la reconexión de los sockets: cada cliente reconstruye sus
+    // transportes con el router nuevo (reusa su propia lógica de reconexión).
+    this.ms.onReset(() => {
+      this.logger.warn('Reiniciando sesiones de audio tras recrear mediasoup.');
+      this.msPeers.clear();
+      this.channelProducer.clear();
+      void this.server.disconnectSockets(true);
+    });
+  }
 
   async handleConnection(client: Socket) {
     const user = await authenticateSocket(client, this.jwt);
