@@ -592,16 +592,26 @@ export class RadioGateway implements OnGatewayConnection, OnGatewayDisconnect {
         });
     };
 
-    // Guardar EN CUANTO ffmpeg cierre el archivo (rápido, sin espera fija). Un
-    // respaldo por si el proceso se cuelga.
-    const fallback = setTimeout(save, 2500);
-    rec.ffmpeg.once('close', () => {
-      clearTimeout(fallback);
-      save();
-    });
+    // Guardar SOLO cuando ffmpeg CIERRE: ahí el archivo ya está volcado a disco.
+    // (Antes un timer llamaba a save() a los 2.5s, cuando ffmpeg aún tenía el
+    //  audio en su búfer y el archivo estaba en 0 bytes -> la nota se descartaba
+    //  aunque luego ffmpeg escribiera el archivo completo.)
+    rec.ffmpeg.once('close', save);
+    // Si el SIGINT no cierra ffmpeg en 6s, lo forzamos (ADTS deja un archivo
+    // usable); el 'close' resultante dispara save.
+    const killTimer = setTimeout(() => {
+      try {
+        rec.ffmpeg.kill('SIGKILL');
+      } catch {
+        /* noop */
+      }
+    }, 6000);
+    rec.ffmpeg.once('close', () => clearTimeout(killTimer));
+    // Último recurso por si 'close' nunca llega.
+    setTimeout(save, 8000);
 
     try {
-      rec.ffmpeg.kill('SIGINT'); // finaliza y cierra el archivo -> dispara 'close'
+      rec.ffmpeg.kill('SIGINT'); // pide finalizar y cerrar el archivo -> 'close'
     } catch {
       /* noop */
     }
