@@ -125,7 +125,9 @@ export class MediasoupService implements OnModuleInit {
   }
 
   getRtpCapabilities() {
-    return this.router.rtpCapabilities;
+    // Si el worker/router no está listo (murió y se está recreando), responder null YA
+    // en vez de lanzar excepción (que deja el ack del cliente colgado 4s por intento).
+    return this.ready ? this.router.rtpCapabilities : null;
   }
 
   /** Crea un WebRtcTransport para enviar o recibir audio desde el cliente. */
