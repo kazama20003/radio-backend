@@ -455,7 +455,11 @@ export class RadioGateway
   /** Producer activo del canal (para que quien entra sepa a quién consumir). */
   @SubscribeMessage('ms:getProducer')
   onGetProducer(@MessageBody() data: { channelId: string }) {
-    return this.channelProducer.get(data.channelId) ?? null;
+    // Devolver SIEMPRE un objeto (nunca null): con null, NestJS no envía el ack y el
+    // cliente espera el timeout (~4s) cada vez que NADIE está hablando, retrasando la
+    // conexión. producerId vacío = no hay nadie transmitiendo ahora.
+    const p = this.channelProducer.get(data.channelId);
+    return { producerId: p?.producerId ?? '', socketId: p?.socketId ?? '' };
   }
 
   @SubscribeMessage('ms:createTransport')
