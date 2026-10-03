@@ -180,7 +180,9 @@ export class AuthService {
     };
     const accessToken = await this.jwt.signAsync(payload, {
       secret: process.env.JWT_ACCESS_SECRET ?? 'dev-access-secret',
-      expiresIn: (process.env.JWT_ACCESS_TTL ?? '15m') as unknown as number,
+      // Radio "siempre conectada": token de acceso de larga duración por defecto para
+      // no re-autenticar el socket tan seguido. (La app igual lo refresca sola si vence.)
+      expiresIn: (process.env.JWT_ACCESS_TTL ?? '7d') as unknown as number,
     });
     const refreshToken = await this.jwt.signAsync(
       { sub: user.id },
