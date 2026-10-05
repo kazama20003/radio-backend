@@ -81,7 +81,16 @@ export class RadioGateway
   /** Producer activo por canal (un hablante a la vez): channelId -> {socketId, producerId}. */
   private readonly channelProducer = new Map<
     string,
-    { socketId: string; producerId: string }
+    {
+      socketId: string;
+      producerId: string;
+      user: Pick<WsUser, 'id' | 'name' | 'nickname'>;
+    }
+  >();
+  /** Palabra asignada mientras el cliente configura su producer WebRTC. */
+  private readonly channelReservations = new Map<
+    string,
+    { socketId: string; user: Pick<WsUser, 'id' | 'name' | 'nickname'> }
   >();
 
   constructor(
@@ -99,6 +108,7 @@ export class RadioGateway
       this.logger.warn('Reiniciando sesiones de audio tras recrear mediasoup.');
       this.msPeers.clear();
       this.channelProducer.clear();
+      this.channelReservations.clear();
       void this.server.disconnectSockets(true);
     });
   }
@@ -188,6 +198,9 @@ export class RadioGateway
     @ConnectedSocket() client: Socket,
     @MessageBody() channelId: string,
   ) {
+    if (this.channelReservations.get(channelId)?.socketId === client.id) {
+      this.channelReservations.delete(channelId);
+    }
     // Si tenía la palabra o estaba en cola, libera/limpia antes de salir.
     this.releaseIfSpeaker(channelId, client.data.user.id);
     this.floor.cancel(channelId, client.data.user.id);
@@ -459,7 +472,59 @@ export class RadioGateway
     // cliente espera el timeout (~4s) cada vez que NADIE está hablando, retrasando la
     // conexión. producerId vacío = no hay nadie transmitiendo ahora.
     const p = this.channelProducer.get(data.channelId);
-    return { producerId: p?.producerId ?? '', socketId: p?.socketId ?? '' };
+    return {
+      producerId: p?.producerId ?? '',
+      socketId: p?.socketId ?? '',
+      user: p?.user ?? null,
+    };
+  }
+
+  /** Reserva el canal antes de activar el micrófono y crear el producer nativo. */
+  @SubscribeMessage('ms:reserve')
+  onReserveProducer(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { channelId: string },
+  ) {
+    const channelId = data?.channelId;
+    if (!channelId) return { ok: false, error: 'canal inválido' };
+
+    const active = this.channelProducer.get(channelId);
+    if (active && active.socketId !== client.id) {
+      if (this.msPeers.has(active.socketId)) {
+        return {
+          ok: false,
+          busy: true,
+          producerId: active.producerId,
+          user: active.user,
+        };
+      }
+      this.channelProducer.delete(channelId);
+    } else if (active?.socketId === client.id) {
+      return { ok: false, busy: true, producerId: active.producerId, user: active.user };
+    }
+
+    const held = this.channelReservations.get(channelId);
+    if (held && held.socketId !== client.id) {
+      return { ok: false, busy: true, user: held.user };
+    }
+
+    const user = client.data.user as WsUser;
+    this.channelReservations.set(channelId, {
+      socketId: client.id,
+      user: { id: user.id, name: user.name, nickname: user.nickname },
+    });
+    return { ok: true };
+  }
+
+  @SubscribeMessage('ms:releaseReservation')
+  onReleaseProducerReservation(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { channelId: string },
+  ) {
+    if (this.channelReservations.get(data?.channelId)?.socketId === client.id) {
+      this.channelReservations.delete(data.channelId);
+    }
+    return { released: true };
   }
 
   @SubscribeMessage('ms:createTransport')
@@ -530,24 +595,57 @@ export class RadioGateway
     const busy = this.channelProducer.get(data.channelId);
     if (busy && busy.socketId !== client.id) {
       if (this.msPeers.has(busy.socketId)) {
-        return { error: 'ocupado', busy: true };
+        return { error: 'ocupado', busy: true, user: busy.user };
       }
       this.channelProducer.delete(data.channelId);
     }
-    const producer = await p.sendTransport.produce({
-      kind: 'audio',
-      rtpParameters: data.rtpParameters,
-    });
+    const held = this.channelReservations.get(data.channelId);
+    if (held && held.socketId !== client.id) {
+      return { error: 'ocupado', busy: true, user: held.user };
+    }
+    const user = client.data.user as WsUser;
+    if (busy?.socketId === client.id) {
+      return { error: 'ya estás transmitiendo', busy: true, user: busy.user };
+    }
+    // Compatibilidad con clientes antiguos: reserva de forma síncrona antes del
+    // primer await para que dos ms:produce simultáneos no ocupen el mismo canal.
+    if (!held) {
+      this.channelReservations.set(data.channelId, {
+        socketId: client.id,
+        user: { id: user.id, name: user.name, nickname: user.nickname },
+      });
+    }
+    let producer: mediasoup.types.Producer;
+    try {
+      producer = await p.sendTransport.produce({
+        kind: 'audio',
+        rtpParameters: data.rtpParameters,
+      });
+    } catch (error) {
+      if (this.channelReservations.get(data.channelId)?.socketId === client.id) {
+        this.channelReservations.delete(data.channelId);
+      }
+      throw error;
+    }
     p.producer = producer;
     p.channelId = data.channelId;
     this.channelProducer.set(data.channelId, {
       socketId: client.id,
       producerId: producer.id,
+      user: { id: user.id, name: user.name, nickname: user.nickname },
     });
+    if (this.channelReservations.get(data.channelId)?.socketId === client.id) {
+      this.channelReservations.delete(data.channelId);
+    }
     // Avisar al canal que hay un nuevo hablante en vivo.
     client
       .to(`channel:${data.channelId}`)
-      .emit('ms:newProducer', { producerId: producer.id, socketId: client.id });
+      .emit('ms:newProducer', {
+        producerId: producer.id,
+        socketId: client.id,
+        channelId: data.channelId,
+        user: { id: user.id, name: user.name, nickname: user.nickname },
+      });
     // Grabar en el servidor (ffmpeg) para guardar la nota al terminar.
     void this.startRecording(client, producer.id, data.channelId);
     return { id: producer.id };
@@ -751,12 +849,18 @@ export class RadioGateway
     if (active?.socketId === client.id) this.channelProducer.delete(channelId);
     this.server
       .to(`channel:${channelId}`)
-      .emit('ms:producerClosed', { channelId });
+      .emit('ms:producerClosed', {
+        channelId,
+        producerId: active?.socketId === client.id ? active.producerId : undefined,
+      });
     this.finishRecording(client, channelId); // detiene ffmpeg y guarda la nota
   }
 
   private cleanupMsPeer(client: Socket) {
     this.closeMsProducer(client);
+    for (const [channelId, reservation] of this.channelReservations) {
+      if (reservation.socketId === client.id) this.channelReservations.delete(channelId);
+    }
     const p = this.msPeers.get(client.id);
     if (!p) return;
     p.consumers.forEach((c) => {
