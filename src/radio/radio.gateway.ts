@@ -461,12 +461,22 @@ export class RadioGateway
   }
 
   @SubscribeMessage('ms:rtpCapabilities')
-  onRtpCapabilities() {
+  onRtpCapabilities(@ConnectedSocket() client: Socket) {
     // Nunca devolver null: Nest no envía ack para null y el cliente espera el timeout.
-    const rtpCapabilities = this.ms.getRtpCapabilities();
-    return rtpCapabilities
-      ? { ready: true, rtpCapabilities }
-      : { ready: false, rtpCapabilities: null };
+    try {
+      const rtpCapabilities = this.ms.getRtpCapabilities();
+      return rtpCapabilities
+        ? { ready: true, rtpCapabilities }
+        : { ready: false, rtpCapabilities: null };
+    } catch (error) {
+      // Un fallo interno también debe confirmar el evento: si Nest deja el ACK
+      // colgado, el Android repite cada 2 s y aparenta tardar ~25 s en conectar.
+      this.logger.error(
+        `No se pudieron obtener RTP capabilities (socket=${client.id}); se reintentará.`,
+        error instanceof Error ? error.stack : String(error),
+      );
+      return { ready: false, rtpCapabilities: null };
+    }
   }
 
   /** Producer activo del canal (para que quien entra sepa a quién consumir). */
