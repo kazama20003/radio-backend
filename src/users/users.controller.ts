@@ -62,6 +62,17 @@ export class UsersController {
     return this.users.setPhoto(id, file);
   }
 
+  /** Administra la foto de cualquier usuario desde la pantalla de personal. */
+  @Roles(Role.ADMIN, Role.SUPERVISOR)
+  @Post(':id/photo')
+  @UseInterceptors(FileInterceptor('file'))
+  uploadUserPhoto(
+    @Param('id') id: string,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    return this.users.setPhoto(id, file);
+  }
+
   @Get()
   findAll(@Query() query: ListUsersQueryDto) {
     return this.users.findAll(query);

@@ -22,6 +22,7 @@ export interface SyncResult {
   created: number;
   updated: number;
   skipped: number;
+  deactivated: number;
   errors: string[];
 }
 
@@ -51,8 +52,10 @@ export class PersonalSyncService {
       created: 0,
       updated: 0,
       skipped: 0,
+      deactivated: 0,
       errors: [],
     };
+    const activeOperatorCodes = new Set<string>();
 
     for (const raw of records) {
       try {
@@ -61,6 +64,7 @@ export class PersonalSyncService {
           result.skipped++;
           continue;
         }
+        activeOperatorCodes.add(mapped.operatorCode);
 
         const existing = await this.prisma.user.findUnique({
           where: { operatorCode: mapped.operatorCode },
@@ -75,7 +79,7 @@ export class PersonalSyncService {
               nickname: mapped.nickname,
               positionTitle: mapped.positionTitle,
               phone: mapped.phone,
-              role: mapped.role,
+              // El rol existente se administra desde la app; RRHH aporta el rol inicial.
               isActive: true, // reactivar si volvió a estar activo en RRHH
             },
           });
@@ -102,8 +106,22 @@ export class PersonalSyncService {
       }
     }
 
+    // El endpoint entrega personal activo. Desactiva cuentas importadas que ya no
+    // aparecen en esa lista, sin tocar cuentas internas que no tienen DNI/código.
+    // Si la fuente devuelve una lista vacía, no se desactiva a todos por precaución.
+    if (activeOperatorCodes.size > 0) {
+      const disabled = await this.prisma.user.updateMany({
+        where: {
+          operatorCode: { not: null, notIn: [...activeOperatorCodes] },
+          isActive: true,
+        },
+        data: { isActive: false },
+      });
+      result.deactivated = disabled.count;
+    }
+
     this.logger.log(
-      `Sync personal: ${result.created} creados, ${result.updated} actualizados, ${result.skipped} omitidos, ${result.errors.length} errores.`,
+      `Sync personal: ${result.created} creados, ${result.updated} actualizados, ${result.deactivated} desactivados, ${result.skipped} omitidos, ${result.errors.length} errores.`,
     );
     return result;
   }
