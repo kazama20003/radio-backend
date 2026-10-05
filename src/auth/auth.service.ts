@@ -183,13 +183,13 @@ export class AuthService {
       // Radio "siempre conectada": token de acceso de larga duración por defecto para
       // no re-autenticar el socket tan seguido. (La app igual lo refresca sola si vence.)
       expiresIn: (process.env.JWT_ACCESS_TTL ?? '7d') as unknown as number,
-    });
+    } as any);
     const refreshToken = await this.jwt.signAsync(
       { sub: user.id },
       {
         secret: process.env.JWT_REFRESH_SECRET ?? 'dev-refresh-secret',
         expiresIn: (process.env.JWT_REFRESH_TTL ?? '30d') as unknown as number,
-      },
+      } as any,
     );
 
     const tokenHash = await bcrypt.hash(refreshToken, 10);
