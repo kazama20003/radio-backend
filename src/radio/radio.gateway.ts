@@ -462,7 +462,11 @@ export class RadioGateway
 
   @SubscribeMessage('ms:rtpCapabilities')
   onRtpCapabilities() {
-    return this.ms.getRtpCapabilities();
+    // Nunca devolver null: Nest no envía ack para null y el cliente espera el timeout.
+    const rtpCapabilities = this.ms.getRtpCapabilities();
+    return rtpCapabilities
+      ? { ready: true, rtpCapabilities }
+      : { ready: false, rtpCapabilities: null };
   }
 
   /** Producer activo del canal (para que quien entra sepa a quién consumir). */
