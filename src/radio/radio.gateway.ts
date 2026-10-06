@@ -842,6 +842,24 @@ export class RadioGateway
     return { resumed: !!c };
   }
 
+  /** Liberar un consumer local que no llegó a reanudarse en el dispositivo. */
+  @SubscribeMessage('ms:closeConsumer')
+  onCloseConsumer(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { consumerId: string },
+  ) {
+    const consumers = this.peer(client).consumers;
+    const consumer = consumers.get(data.consumerId);
+    if (!consumer) return { closed: false };
+    consumers.delete(data.consumerId);
+    try {
+      consumer.close();
+    } catch {
+      /* noop */
+    }
+    return { closed: true };
+  }
+
   /** Dejar de hablar: cierra el producer y avisa al canal. */
   @SubscribeMessage('ms:closeProducer')
   onCloseProducer(@ConnectedSocket() client: Socket) {
