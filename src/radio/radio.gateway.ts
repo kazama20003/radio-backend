@@ -513,7 +513,7 @@ export class RadioGateway
         };
       }
       this.channelProducer.delete(channelId);
-    } else if (active?.socketId === client.id) {
+    } else if (active && active.socketId === client.id) {
       return { ok: false, busy: true, producerId: active.producerId, user: active.user };
     }
 
@@ -618,7 +618,7 @@ export class RadioGateway
       return { error: 'ocupado', busy: true, user: held.user };
     }
     const user = client.data.user as WsUser;
-    if (busy?.socketId === client.id) {
+    if (busy && busy.socketId === client.id) {
       return { error: 'ya estás transmitiendo', busy: true, user: busy.user };
     }
     // Compatibilidad con clientes antiguos: reserva de forma síncrona antes del
@@ -865,7 +865,7 @@ export class RadioGateway
       .to(`channel:${channelId}`)
       .emit('ms:producerClosed', {
         channelId,
-        producerId: active?.socketId === client.id ? active.producerId : undefined,
+        producerId: active && active.socketId === client.id ? active.producerId : undefined,
       });
     this.finishRecording(client, channelId); // detiene ffmpeg y guarda la nota
   }

@@ -174,11 +174,27 @@ export class RadioService {
       .catch(() => undefined);
   }
 
-  async history(channelId: string, limit = 50) {
+  async history(channelId: string, limit = 50, beforeId?: string) {
+    const cursor = beforeId
+      ? await this.prisma.radioTransmission.findFirst({
+          where: { id: beforeId, channelId },
+          select: { id: true, createdAt: true },
+        })
+      : null;
+    if (beforeId && !cursor) return [];
+    const where = cursor
+      ? {
+          channelId,
+          OR: [
+            { createdAt: { lt: cursor.createdAt } },
+            { createdAt: cursor.createdAt, id: { lt: cursor.id } },
+          ],
+        }
+      : { channelId };
     return this.prisma.radioTransmission.findMany({
-      where: { channelId },
-      orderBy: { createdAt: 'desc' },
-      take: Math.min(limit, 200),
+      where,
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: Math.min(Math.max(Math.trunc(limit) || 1, 1), 100),
       include: { sender: senderSelect },
     });
   }
