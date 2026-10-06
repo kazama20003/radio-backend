@@ -24,7 +24,7 @@ export class RadioController {
     return this.radio.listChannels(userId);
   }
 
-  @Roles(Role.ADMIN, Role.SUPERVISOR)
+  @Roles(Role.ADMIN)
   @Post()
   create(@Body() dto: CreateChannelDto) {
     return this.radio.createChannel(dto);
