@@ -41,16 +41,7 @@ export class RadioService {
   }
 
   async createChannel(dto: CreateChannelDto) {
-    return this.prisma.$transaction(async (tx) => {
-      // MAPE supports one shared priority channel at a time.
-      if (dto.isImportant) {
-        await tx.channel.updateMany({
-          where: { isImportant: true },
-          data: { isImportant: false },
-        });
-      }
-      return tx.channel.create({ data: dto });
-    });
+    return this.prisma.channel.create({ data: dto });
   }
 
   async isImportantChannel(channelId: string) {

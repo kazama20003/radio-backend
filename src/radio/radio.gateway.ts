@@ -179,9 +179,11 @@ export class RadioGateway
         left.push(room.substring('channel:'.length));
       }
     }
-    if (client.data.importantChannelId === channelId) {
+    const importantIds = this.importantChannelIds(client);
+    if (importantIds.has(channelId)) {
       client.leave(this.importantRoom(channelId));
-      client.data.importantChannelId = undefined;
+      importantIds.delete(channelId);
+      client.data.importantChannelIds = [...importantIds];
     }
     client.join(`channel:${channelId}`);
     client.data.channelId = channelId;
@@ -197,7 +199,7 @@ export class RadioGateway
     };
   }
 
-  /** Adds a second, receive-only subscription to the one important channel. */
+  /** Adds a receive-only subscription to any enabled important channel. */
   @SubscribeMessage('channel:listen-important')
   async onListenImportant(
     @ConnectedSocket() client: Socket,
@@ -207,11 +209,11 @@ export class RadioGateway
     if (!channelId || !(await this.radio.isImportantChannel(channelId))) {
       return { joined: false, error: 'El canal no está habilitado como importante.' };
     }
-    const previous = client.data.importantChannelId as string | undefined;
-    if (previous && previous !== channelId) client.leave(this.importantRoom(previous));
     await this.radio.join(channelId, client.data.user.id);
     if (client.data.channelId !== channelId) client.join(this.importantRoom(channelId));
-    client.data.importantChannelId = channelId;
+    const importantIds = this.importantChannelIds(client);
+    importantIds.add(channelId);
+    client.data.importantChannelIds = [...importantIds];
     const speaking = this.channelProducer.get(channelId);
     return {
       joined: true,
@@ -223,11 +225,26 @@ export class RadioGateway
   }
 
   @SubscribeMessage('channel:unlisten-important')
-  onUnlistenImportant(@ConnectedSocket() client: Socket) {
-    const channelId = client.data.importantChannelId as string | undefined;
-    if (channelId) client.leave(this.importantRoom(channelId));
-    client.data.importantChannelId = undefined;
-    return { left: channelId ?? null };
+  onUnlistenImportant(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data?: { channelId?: string },
+  ) {
+    const importantIds = this.importantChannelIds(client);
+    const targets = data?.channelId ? [data.channelId] : [...importantIds];
+    for (const channelId of targets) {
+      client.leave(this.importantRoom(channelId));
+      importantIds.delete(channelId);
+    }
+    client.data.importantChannelIds = [...importantIds];
+    return { left: targets };
+  }
+
+  private importantChannelIds(client: Socket): Set<string> {
+    const ids = client.data.importantChannelIds;
+    if (Array.isArray(ids)) return new Set(ids.filter((id) => typeof id === 'string'));
+    // Compatibility with sockets created before the multi-channel rollout.
+    const legacy = client.data.importantChannelId as string | undefined;
+    return new Set(legacy ? [legacy] : []);
   }
 
   private importantRoom(channelId: string) {
@@ -550,7 +567,7 @@ export class RadioGateway
     // conexión. producerId vacío = no hay nadie transmitiendo ahora.
     const allowed =
       client.data.channelId === data.channelId ||
-      client.data.importantChannelId === data.channelId;
+      this.importantChannelIds(client).has(data.channelId);
     const p = allowed ? this.channelProducer.get(data.channelId) : undefined;
     return {
       producerId: p?.producerId ?? '',
@@ -886,7 +903,7 @@ export class RadioGateway
     if (
       !producerChannel ||
       (client.data.channelId !== producerChannel &&
-        client.data.importantChannelId !== producerChannel)
+        !this.importantChannelIds(client).has(producerChannel))
     ) {
       return { error: 'no estás suscrito a ese canal' };
     }
