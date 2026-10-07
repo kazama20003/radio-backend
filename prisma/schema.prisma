@@ -320,6 +320,7 @@ model Channel {
   type        ChannelType     @default(OPERACIONES)
   description String? // "Norte", "Taller"
   isActive    Boolean         @default(true)
+  isImportant Boolean         @default(false)
   createdAt   DateTime        @default(now())
 
   members       ChannelMember[]

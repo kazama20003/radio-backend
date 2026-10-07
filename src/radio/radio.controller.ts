@@ -12,12 +12,16 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { Role } from '../generated/prisma/client';
 import { CreateChannelDto } from './dto/radio.dto';
 import { RadioService } from './radio.service';
+import { RadioGateway } from './radio.gateway';
 
 @ApiTags('radio')
 @ApiBearerAuth()
 @Controller('radio/channels')
 export class RadioController {
-  constructor(private readonly radio: RadioService) {}
+  constructor(
+    private readonly radio: RadioService,
+    private readonly gateway: RadioGateway,
+  ) {}
 
   @Get()
   list(@CurrentUser('id') userId: string) {
@@ -26,8 +30,10 @@ export class RadioController {
 
   @Roles(Role.ADMIN)
   @Post()
-  create(@Body() dto: CreateChannelDto) {
-    return this.radio.createChannel(dto);
+  async create(@Body() dto: CreateChannelDto) {
+    const channel = await this.radio.createChannel(dto);
+    if (channel.isImportant) this.gateway.announceImportantChannelChanged(channel.id);
+    return channel;
   }
 
   @Post(':id/join')

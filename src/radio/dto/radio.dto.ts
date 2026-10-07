@@ -1,4 +1,4 @@
-import { IsEnum, IsNumber, IsOptional, IsString } from 'class-validator';
+import { IsBoolean, IsEnum, IsNumber, IsOptional, IsString } from 'class-validator';
 import { ChannelType } from '../../generated/prisma/client';
 
 export class CreateChannelDto {
@@ -12,6 +12,10 @@ export class CreateChannelDto {
   @IsOptional()
   @IsString()
   description?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  isImportant?: boolean;
 }
 
 export class TransmissionDto {

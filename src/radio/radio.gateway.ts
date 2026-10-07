@@ -179,6 +179,10 @@ export class RadioGateway
         left.push(room.substring('channel:'.length));
       }
     }
+    if (client.data.importantChannelId === channelId) {
+      client.leave(this.importantRoom(channelId));
+      client.data.importantChannelId = undefined;
+    }
     client.join(`channel:${channelId}`);
     client.data.channelId = channelId;
     // Conectados en vivo: actualiza el canal nuevo y los que acaba de dejar.
@@ -191,6 +195,51 @@ export class RadioGateway
       speaking: current ? current.user : null,
       queue: this.floor.queue(channelId),
     };
+  }
+
+  /** Adds a second, receive-only subscription to the one important channel. */
+  @SubscribeMessage('channel:listen-important')
+  async onListenImportant(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { channelId: string },
+  ) {
+    const channelId = data?.channelId;
+    if (!channelId || !(await this.radio.isImportantChannel(channelId))) {
+      return { joined: false, error: 'El canal no está habilitado como importante.' };
+    }
+    const previous = client.data.importantChannelId as string | undefined;
+    if (previous && previous !== channelId) client.leave(this.importantRoom(previous));
+    await this.radio.join(channelId, client.data.user.id);
+    if (client.data.channelId !== channelId) client.join(this.importantRoom(channelId));
+    client.data.importantChannelId = channelId;
+    const speaking = this.channelProducer.get(channelId);
+    return {
+      joined: true,
+      channelId,
+      speaking: speaking
+        ? { producerId: speaking.producerId, socketId: speaking.socketId, user: speaking.user }
+        : null,
+    };
+  }
+
+  @SubscribeMessage('channel:unlisten-important')
+  onUnlistenImportant(@ConnectedSocket() client: Socket) {
+    const channelId = client.data.importantChannelId as string | undefined;
+    if (channelId) client.leave(this.importantRoom(channelId));
+    client.data.importantChannelId = undefined;
+    return { left: channelId ?? null };
+  }
+
+  private importantRoom(channelId: string) {
+    return `radio-important:${channelId}`;
+  }
+
+  private emitImportant(channelId: string, event: string, payload: unknown) {
+    this.server.to(this.importantRoom(channelId)).emit(event, payload);
+  }
+
+  announceImportantChannelChanged(channelId: string) {
+    this.server.emit('channel:important-changed', { channelId });
   }
 
   @SubscribeMessage('channel:leave')
@@ -232,6 +281,7 @@ export class RadioGateway
         channelId: data.channelId,
         user,
       });
+      this.emitImportant(data.channelId, 'ptt:speaking', { channelId: data.channelId, user });
       this.emitQueue(data.channelId);
       return { status: 'granted', channelId: data.channelId };
     }
@@ -271,6 +321,12 @@ export class RadioGateway
       chunk: data.chunk,
       mime: data.mime ?? 'audio/ogg;codecs=opus',
     });
+    client.to(this.importantRoom(data.channelId)).emit('ptt:audio', {
+      channelId: data.channelId,
+      senderId: user.id,
+      chunk: data.chunk,
+      mime: data.mime ?? 'audio/ogg;codecs=opus',
+    });
   }
 
   /**
@@ -299,11 +355,15 @@ export class RadioGateway
     this.server
       .to(`channel:${data.channelId}`)
       .emit('ptt:ended', { channelId: data.channelId, transmission });
+    this.emitImportant(data.channelId, 'ptt:ended', { channelId: data.channelId, transmission });
 
     // Push a los miembros que NO están escuchando en vivo (app cerrada).
     const room = `channel:${data.channelId}`;
     const listening = await this.server.in(room).fetchSockets();
-    const connectedUserIds = listening
+    const importantListeners = await this.server
+      .in(this.importantRoom(data.channelId))
+      .fetchSockets();
+    const connectedUserIds = [...listening, ...importantListeners]
       .map((s) => s.data.user?.id)
       .filter((id): id is string => Boolean(id));
     void this.radio.notifyBroadcast(data.channelId, user, connectedUserIds);
@@ -481,11 +541,17 @@ export class RadioGateway
 
   /** Producer activo del canal (para que quien entra sepa a quién consumir). */
   @SubscribeMessage('ms:getProducer')
-  onGetProducer(@MessageBody() data: { channelId: string }) {
+  onGetProducer(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { channelId: string },
+  ) {
     // Devolver SIEMPRE un objeto (nunca null): con null, NestJS no envía el ack y el
     // cliente espera el timeout (~4s) cada vez que NADIE está hablando, retrasando la
     // conexión. producerId vacío = no hay nadie transmitiendo ahora.
-    const p = this.channelProducer.get(data.channelId);
+    const allowed =
+      client.data.channelId === data.channelId ||
+      client.data.importantChannelId === data.channelId;
+    const p = allowed ? this.channelProducer.get(data.channelId) : undefined;
     return {
       producerId: p?.producerId ?? '',
       socketId: p?.socketId ?? '',
@@ -652,14 +718,14 @@ export class RadioGateway
       this.channelReservations.delete(data.channelId);
     }
     // Avisar al canal que hay un nuevo hablante en vivo.
-    client
-      .to(`channel:${data.channelId}`)
-      .emit('ms:newProducer', {
-        producerId: producer.id,
-        socketId: client.id,
-        channelId: data.channelId,
-        user: { id: user.id, name: user.name, nickname: user.nickname },
-      });
+    const producerEvent = {
+      producerId: producer.id,
+      socketId: client.id,
+      channelId: data.channelId,
+      user: { id: user.id, name: user.name, nickname: user.nickname },
+    };
+    client.to(`channel:${data.channelId}`).emit('ms:newProducer', producerEvent);
+    client.to(this.importantRoom(data.channelId)).emit('ms:newProducer', producerEvent);
     // Grabar en el servidor (ffmpeg) para guardar la nota al terminar.
     void this.startRecording(client, producer.id, data.channelId);
     return { id: producer.id };
@@ -815,6 +881,15 @@ export class RadioGateway
   ) {
     const p = this.peer(client);
     if (!p.recvTransport) return { error: 'sin transporte de recepción' };
+    const producerChannel = [...this.channelProducer.entries()]
+      .find(([, active]) => active.producerId === data.producerId)?.[0];
+    if (
+      !producerChannel ||
+      (client.data.channelId !== producerChannel &&
+        client.data.importantChannelId !== producerChannel)
+    ) {
+      return { error: 'no estás suscrito a ese canal' };
+    }
     if (!this.ms.canConsume(data.producerId, data.rtpCapabilities)) {
       return { error: 'no se puede consumir' };
     }
@@ -885,6 +960,10 @@ export class RadioGateway
         channelId,
         producerId: active && active.socketId === client.id ? active.producerId : undefined,
       });
+    client.to(this.importantRoom(channelId)).emit('ms:producerClosed', {
+      channelId,
+      producerId: active && active.socketId === client.id ? active.producerId : undefined,
+    });
     this.finishRecording(client, channelId); // detiene ffmpeg y guarda la nota
   }
 
