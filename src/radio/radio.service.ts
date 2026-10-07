@@ -44,12 +44,12 @@ export class RadioService {
     return this.prisma.channel.create({ data: dto });
   }
 
-  async isImportantChannel(channelId: string) {
+  async isActiveChannel(channelId: string) {
     const channel = await this.prisma.channel.findUnique({
       where: { id: channelId, isActive: true },
-      select: { isImportant: true },
+      select: { id: true },
     });
-    return channel?.isImportant === true;
+    return channel != null;
   }
 
   async join(channelId: string, userId: string) {

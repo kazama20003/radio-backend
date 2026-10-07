@@ -199,15 +199,15 @@ export class RadioGateway
     };
   }
 
-  /** Adds a receive-only subscription to any enabled important channel. */
+  /** Adds a receive-only subscription to any active channel the user selects. */
   @SubscribeMessage('channel:listen-important')
   async onListenImportant(
     @ConnectedSocket() client: Socket,
     @MessageBody() data: { channelId: string },
   ) {
     const channelId = data?.channelId;
-    if (!channelId || !(await this.radio.isImportantChannel(channelId))) {
-      return { joined: false, error: 'El canal no está habilitado como importante.' };
+    if (!channelId || !(await this.radio.isActiveChannel(channelId))) {
+      return { joined: false, error: 'El canal no está disponible.' };
     }
     await this.radio.join(channelId, client.data.user.id);
     if (client.data.channelId !== channelId) client.join(this.importantRoom(channelId));
