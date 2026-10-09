@@ -102,7 +102,7 @@ export class TrackingService {
         status: speed > 3 ? UnitStatus.EN_RUTA : UnitStatus.DETENIDO,
       },
       include: {
-        operator: { select: { id: true, name: true, nickname: true, avatarKey: true } },
+        operator: { select: { id: true, name: true, nickname: true, avatarKey: true, photoUrl: true } },
       },
     });
 
@@ -148,6 +148,7 @@ export class TrackingService {
         name: true,
         nickname: true,
         avatarKey: true,
+        photoUrl: true,
         role: true,
         lastLat: true,
         lastLng: true,
@@ -170,6 +171,7 @@ export class TrackingService {
         name: true,
         nickname: true,
         avatarKey: true,
+        photoUrl: true,
         role: true,
         lastLat: true,
         lastLng: true,
@@ -201,7 +203,7 @@ export class TrackingService {
         lastSpeedKmh: true,
         lastHeading: true,
         lastPositionAt: true,
-        operator: { select: { id: true, name: true, nickname: true, avatarKey: true } },
+        operator: { select: { id: true, name: true, nickname: true, avatarKey: true, photoUrl: true } },
       },
     });
     return units;
