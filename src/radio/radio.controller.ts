@@ -51,7 +51,8 @@ export class RadioController {
     @Param('id') id: string,
     @Query('limit') limit?: string,
     @Query('before') before?: string,
+    @Query('after') after?: string,
   ) {
-    return this.radio.history(id, limit ? Number(limit) : 50, before);
+    return this.radio.history(id, limit ? Number(limit) : 50, before, after);
   }
 }
