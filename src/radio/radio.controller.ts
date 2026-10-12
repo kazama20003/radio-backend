@@ -4,13 +4,14 @@ import {
   Get,
   Param,
   Post,
+  Patch,
   Query,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { Role } from '../generated/prisma/client';
-import { CreateChannelDto } from './dto/radio.dto';
+import { CreateChannelDto, UpdateChannelDto } from './dto/radio.dto';
 import { RadioService } from './radio.service';
 import { RadioGateway } from './radio.gateway';
 
@@ -34,6 +35,12 @@ export class RadioController {
     const channel = await this.radio.createChannel(dto);
     if (channel.isImportant) this.gateway.announceImportantChannelChanged(channel.id);
     return channel;
+  }
+
+  @Roles(Role.ADMIN)
+  @Patch(':id')
+  update(@Param('id') id: string, @Body() dto: UpdateChannelDto) {
+    return this.radio.updateChannel(id, dto);
   }
 
   @Post(':id/join')
