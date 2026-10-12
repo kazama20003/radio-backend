@@ -20,6 +20,7 @@ import { UPLOAD_DIR } from '../media/media.controller';
 import { MediasoupService } from './mediasoup.service';
 import { RadioFloorService } from './radio-floor.service';
 import { RadioService } from './radio.service';
+import { PrismaService } from '../prisma/prisma.service';
 
 /** Grabación en curso de una transmisión. */
 interface MsRecording {
@@ -98,6 +99,7 @@ export class RadioGateway
     private readonly radio: RadioService,
     private readonly floor: RadioFloorService,
     private readonly ms: MediasoupService,
+    private readonly prisma: PrismaService,
   ) {}
 
   afterInit() {
@@ -169,7 +171,21 @@ export class RadioGateway
     @ConnectedSocket() client: Socket,
     @MessageBody() channelId: string,
   ) {
-    await this.radio.join(channelId, client.data.user.id);
+    if (typeof channelId !== 'string' || !channelId) return { joined: false, error: 'Canal inválido.' };
+    const privateConversationId = this.privateConversationId(channelId);
+    if (privateConversationId) {
+      const allowed = await this.prisma.conversation.findFirst({
+        where: {
+          id: privateConversationId,
+          type: 'DIRECT',
+          members: { some: { userId: client.data.user.id } },
+        },
+        select: { id: true },
+      });
+      if (!allowed) return { joined: false, error: 'No perteneces a esta conversación privada.' };
+    } else {
+      await this.radio.join(channelId, client.data.user.id);
+    }
     // Salir de CUALQUIER otro canal antes de entrar: un socket solo debe estar
     // en un canal a la vez, si no se cruzan el audio y el chat entre canales.
     const left: string[] = [];
@@ -286,6 +302,7 @@ export class RadioGateway
     @ConnectedSocket() client: Socket,
     @MessageBody() data: { channelId: string },
   ) {
+    if (data?.channelId !== client.data.channelId) return { status: 'denied' };
     const user = client.data.user;
     const result = this.floor.request(data.channelId, {
       socketId: client.id,
@@ -356,12 +373,23 @@ export class RadioGateway
     @MessageBody()
     data: { channelId: string; audioKey?: string; durationSec?: number },
   ) {
+    if (data?.channelId !== client.data.channelId) return { released: false };
     const user = client.data.user;
     if (!this.floor.isSpeaker(data.channelId, user.id)) {
       return { released: false };
     }
 
     const next = this.floor.release(data.channelId, user.id);
+
+    if (this.privateConversationId(data.channelId)) {
+      this.server.to(`channel:${data.channelId}`).emit('ptt:ended', {
+        channelId: data.channelId,
+        user: { id: user.id, nickname: user.nickname, name: user.name },
+      });
+      this.grantFloor(data.channelId, next);
+      this.emitQueue(data.channelId);
+      return { released: true };
+    }
 
     // Persiste metadatos de la transmisión (audioKey opcional si se grabó).
     const transmission = await this.radio.recordTransmission(
@@ -583,7 +611,7 @@ export class RadioGateway
     @MessageBody() data: { channelId: string },
   ) {
     const channelId = data?.channelId;
-    if (!channelId) return { ok: false, error: 'canal inválido' };
+    if (!channelId || channelId !== client.data.channelId) return { ok: false, error: 'canal inválido' };
 
     const active = this.channelProducer.get(channelId);
     if (active && active.socketId !== client.id) {
@@ -618,6 +646,7 @@ export class RadioGateway
     @ConnectedSocket() client: Socket,
     @MessageBody() data: { channelId: string },
   ) {
+    if (data?.channelId !== client.data.channelId) return { released: false };
     if (this.channelReservations.get(data?.channelId)?.socketId === client.id) {
       this.channelReservations.delete(data.channelId);
     }
@@ -684,6 +713,7 @@ export class RadioGateway
     data: { channelId: string; rtpParameters: mediasoup.types.RtpParameters },
   ) {
     const p = this.peer(client);
+    if (!data?.channelId || data.channelId !== client.data.channelId) return { error: 'no estás en ese canal' };
     if (!p.sendTransport) return { error: 'sin transporte de envío' };
     // Half-duplex: un solo hablante a la vez por canal. Si el "ocupante" sigue
     // conectado (msPeers lo tiene), hay otro hablando de verdad -> ocupado. Si
@@ -742,7 +772,9 @@ export class RadioGateway
       user: { id: user.id, name: user.name, nickname: user.nickname },
     };
     client.to(`channel:${data.channelId}`).emit('ms:newProducer', producerEvent);
-    client.to(this.importantRoom(data.channelId)).emit('ms:newProducer', producerEvent);
+    if (!this.privateConversationId(data.channelId)) {
+      client.to(this.importantRoom(data.channelId)).emit('ms:newProducer', producerEvent);
+    }
     // Grabar en el servidor (ffmpeg) para guardar la nota al terminar.
     void this.startRecording(client, producer.id, data.channelId);
     return { id: producer.id };
@@ -841,15 +873,19 @@ export class RadioGateway
         );
         return;
       }
-      void this.radio
-        .recordTransmission(channelId, userId, { audioKey: rec.file, durationSec })
+      const conversationId = this.privateConversationId(channelId);
+      const savePromise = conversationId
+        ? this.savePrivateTransmission(conversationId, userId, rec.file, durationSec)
+        : this.radio.recordTransmission(channelId, userId, { audioKey: rec.file, durationSec });
+      void savePromise
         .then((transmission) => {
           this.logger.log(
-            `Nota de voz guardada (${size} bytes, ${durationSec.toFixed(1)}s) en canal ${channelId}.`,
+            `Nota de voz guardada (${size} bytes, ${durationSec.toFixed(1)}s) en ${conversationId ? `conversación privada ${conversationId}` : `canal ${channelId}`}.`,
           );
-          this.server
-            .to(`channel:${channelId}`)
-            .emit('ptt:ended', { channelId, transmission });
+          this.server.to(`channel:${channelId}`).emit(
+            conversationId ? 'private-radio:message' : 'ptt:ended',
+            conversationId ? transmission : { channelId, transmission },
+          );
         })
         .catch((err) => {
           this.logger.error(
@@ -977,11 +1013,34 @@ export class RadioGateway
         channelId,
         producerId: active && active.socketId === client.id ? active.producerId : undefined,
       });
-    client.to(this.importantRoom(channelId)).emit('ms:producerClosed', {
-      channelId,
-      producerId: active && active.socketId === client.id ? active.producerId : undefined,
-    });
+    if (!this.privateConversationId(channelId)) {
+      client.to(this.importantRoom(channelId)).emit('ms:producerClosed', {
+        channelId,
+        producerId: active && active.socketId === client.id ? active.producerId : undefined,
+      });
+    }
     this.finishRecording(client, channelId); // detiene ffmpeg y guarda la nota
+  }
+
+  private privateConversationId(channelId: string): string | null {
+    return channelId.startsWith('private:') ? channelId.slice('private:'.length) || null : null;
+  }
+
+  private async savePrivateTransmission(conversationId: string, userId: string, audioKey: string, durationSec: number) {
+    const membership = await this.prisma.conversation.findFirst({
+      where: { id: conversationId, type: 'DIRECT', members: { some: { userId } } },
+      select: { id: true },
+    });
+    if (!membership) throw new Error('El usuario ya no pertenece a la conversación privada.');
+    const message = await this.prisma.message.create({
+      data: { conversationId, senderId: userId, type: 'VOICE', attachmentKey: audioKey, durationSec: Math.round(durationSec) },
+      include: { sender: { select: { id: true, name: true, nickname: true, avatarKey: true } } },
+    });
+    await this.prisma.conversation.update({
+      where: { id: conversationId },
+      data: { lastMessageAt: message.createdAt },
+    });
+    return message;
   }
 
   private cleanupMsPeer(client: Socket) {
