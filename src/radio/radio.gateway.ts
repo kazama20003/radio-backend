@@ -180,9 +180,11 @@ export class RadioGateway
           type: 'DIRECT',
           members: { some: { userId: client.data.user.id } },
         },
-        select: { id: true },
+        select: { id: true, members: { select: { userId: true } } },
       });
-      if (!allowed) return { joined: false, error: 'No perteneces a esta conversación privada.' };
+      if (!allowed || allowed.members.length !== 2) {
+        return { joined: false, error: 'Esta conversación no es una sala privada válida.' };
+      }
     } else {
       await this.radio.join(channelId, client.data.user.id);
     }
@@ -1029,9 +1031,11 @@ export class RadioGateway
   private async savePrivateTransmission(conversationId: string, userId: string, audioKey: string, durationSec: number) {
     const membership = await this.prisma.conversation.findFirst({
       where: { id: conversationId, type: 'DIRECT', members: { some: { userId } } },
-      select: { id: true },
+      select: { id: true, members: { select: { userId: true } } },
     });
-    if (!membership) throw new Error('El usuario ya no pertenece a la conversación privada.');
+    if (!membership || membership.members.length !== 2) {
+      throw new Error('El usuario ya no pertenece a una conversación privada válida.');
+    }
     const message = await this.prisma.message.create({
       data: { conversationId, senderId: userId, type: 'VOICE', attachmentKey: audioKey, durationSec: Math.round(durationSec) },
       include: { sender: { select: { id: true, name: true, nickname: true, avatarKey: true } } },
