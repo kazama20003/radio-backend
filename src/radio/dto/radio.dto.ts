@@ -18,6 +18,11 @@ export class CreateChannelDto {
   isImportant?: boolean;
 }
 
+export class UpdateChannelDto {
+  @IsString()
+  name!: string;
+}
+
 export class TransmissionDto {
   @IsOptional()
   @IsString()

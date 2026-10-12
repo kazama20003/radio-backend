@@ -6,7 +6,7 @@ import { Prisma } from '../generated/prisma/client';
 import { UPLOAD_DIR } from '../media/media.controller';
 import { PushService } from '../notifications/push.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { CreateChannelDto, TransmissionDto } from './dto/radio.dto';
+import { CreateChannelDto, TransmissionDto, UpdateChannelDto } from './dto/radio.dto';
 
 /** Días que se conservan los audios de radio antes de borrarse automáticamente. */
 const AUDIO_RETENTION_DAYS = 7;
@@ -42,6 +42,14 @@ export class RadioService {
 
   async createChannel(dto: CreateChannelDto) {
     return this.prisma.channel.create({ data: dto });
+  }
+
+  async updateChannel(channelId: string, dto: UpdateChannelDto) {
+    await this.ensureChannel(channelId);
+    return this.prisma.channel.update({
+      where: { id: channelId },
+      data: { name: dto.name.trim() },
+    });
   }
 
   async isActiveChannel(channelId: string) {
