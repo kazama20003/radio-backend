@@ -152,9 +152,12 @@ export class RadioGateway
         }
       }
     }
-    // Actualiza conectados en vivo del canal que el usuario tenía abierto.
-    const openChannel = client.data.channelId as string | undefined;
-    if (openChannel) void this.emitPresence(openChannel);
+    // También refresca el canal público que se conserva durante PTT privado.
+    const affectedChannels = new Set([
+      client.data.channelId as string | undefined,
+      client.data.radioPublicChannelId as string | undefined,
+    ].filter((id): id is string => Boolean(id)));
+    for (const channelId of affectedChannels) void this.emitPresence(channelId);
     if (!user) return;
     const changes = this.floor.handleDisconnect(user.id);
     for (const change of changes) {
@@ -313,6 +316,7 @@ export class RadioGateway
     }
     client.join(`channel:${channelId}`);
     client.data.channelId = channelId;
+    if (!privateConversationId) client.data.radioPublicChannelId = channelId;
     // Conectados en vivo: actualiza el canal nuevo y los que acaba de dejar.
     await this.emitPresence(channelId);
     for (const cid of left) await this.emitPresence(cid);
@@ -399,6 +403,7 @@ export class RadioGateway
     this.emitQueue(channelId);
     client.leave(`channel:${channelId}`);
     if (client.data.channelId === channelId) client.data.channelId = undefined;
+    if (client.data.radioPublicChannelId === channelId) client.data.radioPublicChannelId = undefined;
     await this.emitPresence(channelId);
     return { left: channelId };
   }
