@@ -43,6 +43,17 @@ interface MsPeer {
   recording?: MsRecording;
 }
 
+interface PrivateRadioCall {
+  callId: string;
+  conversationId: string;
+  callerId: string;
+  targetId: string;
+  callerName: string;
+  targetName: string;
+  state: 'RINGING' | 'ACTIVE';
+  timeout?: ReturnType<typeof setTimeout>;
+}
+
 /** Puerto UDP rotatorio para el RTP de grabación (ffmpeg). */
 let recPortCounter = 41000;
 function nextRecPort() {
@@ -93,6 +104,7 @@ export class RadioGateway
     string,
     { socketId: string; user: Pick<WsUser, 'id' | 'name' | 'nickname'> }
   >();
+  private readonly privateCalls = new Map<string, PrivateRadioCall>();
 
   constructor(
     private readonly jwt: JwtService,
@@ -122,12 +134,20 @@ export class RadioGateway
       return;
     }
     client.data.user = user;
+    client.join(`radio-user:${user.id}`);
   }
 
   /** Al desconectar: libera la palabra o saca de la cola en cada canal afectado. */
   handleDisconnect(client: Socket) {
     this.cleanupMsPeer(client); // libera transportes/producer/consumers de mediasoup
     const user = client.data.user;
+    if (user) {
+      for (const call of [...this.privateCalls.values()]) {
+        if (call.callerId === user.id || call.targetId === user.id) {
+          this.finishPrivateCall(call, 'disconnected');
+        }
+      }
+    }
     // Actualiza conectados en vivo del canal que el usuario tenía abierto.
     const openChannel = client.data.channelId as string | undefined;
     if (openChannel) void this.emitPresence(openChannel);
@@ -142,6 +162,87 @@ export class RadioGateway
       }
       this.emitQueue(change.channelId);
     }
+  }
+
+  @SubscribeMessage('private-radio:call')
+  async onPrivateRadioCall(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { callId?: string; conversationId?: string; targetUserId?: string; channelId?: string },
+  ) {
+    const user = client.data.user as WsUser | undefined;
+    const { callId, conversationId, targetUserId, channelId } = data ?? {};
+    if (!user || !callId || !conversationId || !targetUserId || !channelId || client.data.channelId !== channelId || this.privateConversationId(channelId)) {
+      return { ok: false, error: 'Llamada inválida.' };
+    }
+    const conversation = await this.prisma.conversation.findFirst({
+      where: { id: conversationId, type: 'DIRECT', members: { some: { userId: user.id } } },
+      include: { members: { include: { user: true } } },
+    });
+    if (!conversation || conversation.members.length !== 2 || !conversation.members.some((m) => m.userId === targetUserId)) {
+      return { ok: false, error: 'La conversación privada no es válida.' };
+    }
+    const live = await this.server.in(`channel:${channelId}`).fetchSockets();
+    if (!live.some((s) => (s.data?.user as WsUser | undefined)?.id === targetUserId)) {
+      return { ok: false, error: 'El usuario ya no está conectado a este canal.' };
+    }
+    if ([...this.privateCalls.values()].some((c) => c.callerId === user.id || c.targetId === user.id || c.callerId === targetUserId || c.targetId === targetUserId)) {
+      return { ok: false, error: 'Uno de los usuarios ya está en una llamada privada.' };
+    }
+    if (this.privateCalls.has(callId)) return { ok: false, error: 'La llamada ya existe.' };
+    const target = conversation.members.find((m) => m.userId === targetUserId)?.user;
+    const call: PrivateRadioCall = {
+      callId, conversationId, callerId: user.id, targetId: targetUserId,
+      callerName: user.nickname || user.name || 'Usuario',
+      targetName: target?.nickname || target?.name || 'Usuario', state: 'RINGING',
+    };
+    call.timeout = setTimeout(() => this.finishPrivateCall(call, 'timeout'), 30_000);
+    this.privateCalls.set(callId, call);
+    this.server.to(`radio-user:${targetUserId}`).emit('private-radio:incoming', {
+      callId, conversationId, callerId: user.id, callerName: call.callerName,
+    });
+    return { ok: true, callId };
+  }
+
+  @SubscribeMessage('private-radio:answer')
+  onPrivateRadioAnswer(@ConnectedSocket() client: Socket, @MessageBody() data: { callId?: string; accept?: boolean }) {
+    const call = data?.callId ? this.privateCalls.get(data.callId) : undefined;
+    const user = client.data.user as WsUser | undefined;
+    if (!call || call.state !== 'RINGING' || call.targetId !== user?.id) return { ok: false, error: 'La llamada ya no está disponible.' };
+    if (!data.accept) {
+      this.finishPrivateCall(call, 'declined');
+      return { ok: true, accepted: false };
+    }
+    if (call.timeout) clearTimeout(call.timeout);
+    call.timeout = undefined;
+    call.state = 'ACTIVE';
+    this.server.to(`radio-user:${call.callerId}`).emit('private-radio:accepted', { callId: call.callId, conversationId: call.conversationId, peerName: call.targetName });
+    this.server.to(`radio-user:${call.targetId}`).emit('private-radio:accepted', { callId: call.callId, conversationId: call.conversationId, peerName: call.callerName });
+    return { ok: true, accepted: true };
+  }
+
+  @SubscribeMessage('private-radio:end')
+  onPrivateRadioEnd(@ConnectedSocket() client: Socket, @MessageBody() data: { callId?: string }) {
+    const call = data?.callId ? this.privateCalls.get(data.callId) : undefined;
+    const user = client.data.user as WsUser | undefined;
+    if (!call || (call.callerId !== user?.id && call.targetId !== user?.id)) return { ok: false };
+    this.finishPrivateCall(call, 'ended');
+    return { ok: true };
+  }
+
+  @SubscribeMessage('private-radio:cancel')
+  onPrivateRadioCancel(@ConnectedSocket() client: Socket, @MessageBody() data: { callId?: string }) {
+    const call = data?.callId ? this.privateCalls.get(data.callId) : undefined;
+    if (!call || call.state !== 'RINGING' || call.callerId !== client.data.user?.id) return { ok: false };
+    this.finishPrivateCall(call, 'cancelled');
+    return { ok: true };
+  }
+
+  private finishPrivateCall(call: PrivateRadioCall, reason: string) {
+    if (!this.privateCalls.delete(call.callId)) return;
+    if (call.timeout) clearTimeout(call.timeout);
+    const payload = { callId: call.callId, conversationId: call.conversationId, reason };
+    this.server.to(`radio-user:${call.callerId}`).emit('private-radio:ended', payload);
+    this.server.to(`radio-user:${call.targetId}`).emit('private-radio:ended', payload);
   }
 
   /**
