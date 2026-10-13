@@ -105,6 +105,9 @@ export class RadioGateway
     { socketId: string; user: Pick<WsUser, 'id' | 'name' | 'nickname'> }
   >();
   private readonly privateCalls = new Map<string, PrivateRadioCall>();
+  /** Grace window for temporary mobile network drops during private radio. */
+  private readonly privateCallDisconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly privateCallReconnectGraceMs = 60_000;
 
   constructor(
     private readonly jwt: JwtService,
@@ -135,6 +138,24 @@ export class RadioGateway
     }
     client.data.user = user;
     client.join(`radio-user:${user.id}`);
+    const disconnectTimer = this.privateCallDisconnectTimers.get(user.id);
+    if (disconnectTimer) {
+      clearTimeout(disconnectTimer);
+      this.privateCallDisconnectTimers.delete(user.id);
+    }
+    // Restore an in-memory call after a network reconnect (or app process restart).
+    for (const call of this.privateCalls.values()) {
+      if (call.callerId !== user.id && call.targetId !== user.id) continue;
+      const outgoing = call.callerId === user.id;
+      client.emit('private-radio:resumed', {
+        callId: call.callId,
+        conversationId: call.conversationId,
+        peerId: outgoing ? call.targetId : call.callerId,
+        peerName: outgoing ? call.targetName : call.callerName,
+        outgoing,
+        phase: call.state === 'ACTIVE' ? 'ACTIVE' : outgoing ? 'OUTGOING' : 'INCOMING',
+      });
+    }
   }
 
   /** Al desconectar: libera la palabra o saca de la cola en cada canal afectado. */
@@ -145,10 +166,23 @@ export class RadioGateway
       // No terminar la llamada porque se haya caído una sesión redundante.
       const remainingSessions = await this.server.in(`radio-user:${user.id}`).fetchSockets();
       if (remainingSessions.length === 0) {
-        for (const call of [...this.privateCalls.values()]) {
-          if (call.callerId === user.id || call.targetId === user.id) {
-            this.finishPrivateCall(call, 'disconnected');
-          }
+        const hasPrivateCall = [...this.privateCalls.values()].some(
+          (call) => call.callerId === user.id || call.targetId === user.id,
+        );
+        if (hasPrivateCall) {
+          const previous = this.privateCallDisconnectTimers.get(user.id);
+          if (previous) clearTimeout(previous);
+          const timer = setTimeout(async () => {
+            this.privateCallDisconnectTimers.delete(user.id);
+            const reconnectedSessions = await this.server.in(`radio-user:${user.id}`).fetchSockets();
+            if (reconnectedSessions.length > 0) return;
+            for (const call of [...this.privateCalls.values()]) {
+              if (call.callerId === user.id || call.targetId === user.id) {
+                this.finishPrivateCall(call, 'disconnected');
+              }
+            }
+          }, this.privateCallReconnectGraceMs);
+          this.privateCallDisconnectTimers.set(user.id, timer);
         }
       }
     }
