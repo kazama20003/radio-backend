@@ -181,7 +181,7 @@ export class RadioGateway
     if (!conversation || conversation.members.length !== 2 || !conversation.members.some((m) => m.userId === targetUserId)) {
       return { ok: false, error: 'La conversación privada no es válida.' };
     }
-    const live = await this.server.in(`channel:${channelId}`).fetchSockets();
+    const live = await this.server.in(`radio-user:${targetUserId}`).fetchSockets();
     if (!live.some((s) => (s.data?.user as WsUser | undefined)?.id === targetUserId)) {
       return { ok: false, error: 'El usuario ya no está conectado a este canal.' };
     }
