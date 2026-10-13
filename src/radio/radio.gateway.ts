@@ -138,13 +138,17 @@ export class RadioGateway
   }
 
   /** Al desconectar: libera la palabra o saca de la cola en cada canal afectado. */
-  handleDisconnect(client: Socket) {
+  async handleDisconnect(client: Socket) {
     this.cleanupMsPeer(client); // libera transportes/producer/consumers de mediasoup
     const user = client.data.user;
     if (user) {
-      for (const call of [...this.privateCalls.values()]) {
-        if (call.callerId === user.id || call.targetId === user.id) {
-          this.finishPrivateCall(call, 'disconnected');
+      // No terminar la llamada porque se haya caído una sesión redundante.
+      const remainingSessions = await this.server.in(`radio-user:${user.id}`).fetchSockets();
+      if (remainingSessions.length === 0) {
+        for (const call of [...this.privateCalls.values()]) {
+          if (call.callerId === user.id || call.targetId === user.id) {
+            this.finishPrivateCall(call, 'disconnected');
+          }
         }
       }
     }
@@ -289,11 +293,14 @@ export class RadioGateway
     } else {
       await this.radio.join(channelId, client.data.user.id);
     }
-    // Salir de CUALQUIER otro canal antes de entrar: un socket solo debe estar
-    // en un canal a la vez, si no se cruzan el audio y el chat entre canales.
+    // El PTT privado conserva la presencia del canal público. Al entrar a otro
+    // canal público se mantiene el cambio normal de sala.
     const left: string[] = [];
+    const newRoom = `channel:${channelId}`;
     for (const room of client.rooms) {
-      if (room.startsWith('channel:') && room !== `channel:${channelId}`) {
+      const shouldLeave = room.startsWith('channel:') && room !== newRoom &&
+        (!privateConversationId || room.startsWith('channel:private:'));
+      if (shouldLeave) {
         client.leave(room);
         left.push(room.substring('channel:'.length));
       }
