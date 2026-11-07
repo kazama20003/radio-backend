@@ -1,5 +1,6 @@
 import { Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
+import { randomUUID } from 'crypto';
 import {
   ConnectedSocket,
   MessageBody,
@@ -108,6 +109,7 @@ export class RadioGateway
   /** Grace window for temporary mobile network drops during private radio. */
   private readonly privateCallDisconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly privateCallReconnectGraceMs = 60_000;
+  private readonly emergencyCooldowns = new Map<string, number>();
 
   constructor(
     private readonly jwt: JwtService,
@@ -361,6 +363,63 @@ export class RadioGateway
       speaking: current ? current.user : null,
       queue: this.floor.queue(channelId),
     };
+  }
+
+  @SubscribeMessage('channel:emergency')
+  async onChannelEmergency(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { channelId?: string },
+  ) {
+    const user = client.data.user as WsUser | undefined;
+    const channelId = data?.channelId;
+    const room = channelId ? `channel:${channelId}` : '';
+    if (
+      !user || !channelId || channelId.startsWith('private:') ||
+      client.data.channelId !== channelId || !client.rooms.has(room)
+    ) {
+      return { ok: false, error: 'Debes estar conectado al canal para enviar la emergencia.' };
+    }
+
+    const now = Date.now();
+    const cooldownKey = `${channelId}:${user.id}`;
+    const lastSentAt = this.emergencyCooldowns.get(cooldownKey) ?? 0;
+    const cooldownMs = 15_000;
+    if (now - lastSentAt < cooldownMs) {
+      const waitSeconds = Math.ceil((cooldownMs - (now - lastSentAt)) / 1000);
+      return { ok: false, error: `Espera ${waitSeconds} segundos antes de volver a avisar.` };
+    }
+
+    const channel = await this.prisma.channel.findFirst({
+      where: { id: channelId, isActive: true },
+      select: { id: true, name: true },
+    });
+    if (!channel) return { ok: false, error: 'El canal no está disponible.' };
+
+    this.emergencyCooldowns.set(cooldownKey, now);
+    if (this.emergencyCooldowns.size > 1000) {
+      for (const [key, timestamp] of this.emergencyCooldowns) {
+        if (now - timestamp > 60 * 60_000) this.emergencyCooldowns.delete(key);
+      }
+    }
+
+    const senderName = user.nickname?.trim() || user.name?.trim() || 'Usuario';
+    const payload = {
+      id: randomUUID(),
+      channelId,
+      channelName: channel.name,
+      senderId: user.id,
+      senderName,
+      createdAt: new Date(now).toISOString(),
+    };
+    const importantRoom = this.importantRoom(channelId);
+    this.server.to(room).to(importantRoom).except(client.id).emit('channel:emergency', payload);
+
+    const listeningSockets = await this.server.in([room, importantRoom]).fetchSockets();
+    const listeningUserIds = listeningSockets
+      .map((socket) => (socket.data.user as WsUser | undefined)?.id)
+      .filter((id): id is string => Boolean(id));
+    void this.radio.notifyEmergency(channelId, channel.name, user, listeningUserIds);
+    return { ok: true, id: payload.id };
   }
 
   /** Adds a receive-only subscription to any active channel the user selects. */

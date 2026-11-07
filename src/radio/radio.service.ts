@@ -190,6 +190,30 @@ export class RadioService {
       .catch(() => undefined);
   }
 
+  /** Envía una notificación de emergencia a los miembros desconectados del canal. */
+  async notifyEmergency(
+    channelId: string,
+    channelName: string,
+    sender: { id: string; name?: string | null; nickname?: string | null },
+    excludeUserIds: string[] = [],
+  ): Promise<void> {
+    const exclude = new Set([sender.id, ...excludeUserIds]);
+    const members = await this.prisma.channelMember.findMany({
+      where: { channelId },
+      select: { userId: true },
+    });
+    const recipients = members.map((member) => member.userId).filter((id) => !exclude.has(id));
+    if (!recipients.length) return;
+
+    const senderName = sender.nickname?.trim() || sender.name?.trim() || 'Usuario';
+    await this.push.sendToUsers(recipients, {
+      category: 'criticalAlerts',
+      title: `🚨 EMERGENCIA · ${senderName}`,
+      body: `Solicita apoyo en ${channelName}`,
+      data: { kind: 'radio_emergency', channelId },
+    }).catch(() => undefined);
+  }
+
   async history(channelId: string, limit = 50, beforeId?: string, afterId?: string) {
     const take = Math.min(Math.max(Math.trunc(limit) || 1, 1), 100);
     if (afterId) {
