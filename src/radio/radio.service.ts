@@ -190,28 +190,29 @@ export class RadioService {
       .catch(() => undefined);
   }
 
-  /** Envía una notificación de emergencia a los miembros desconectados del canal. */
+  /** Envía una emergencia a los usuarios activos desconectados de Socket.IO. */
   async notifyEmergency(
     channelId: string,
     channelName: string,
     sender: { id: string; name?: string | null; nickname?: string | null },
+    alertId: string,
     excludeUserIds: string[] = [],
   ): Promise<void> {
     const exclude = new Set([sender.id, ...excludeUserIds]);
-    const members = await this.prisma.channelMember.findMany({
-      where: { channelId },
-      select: { userId: true },
+    const users = await this.prisma.user.findMany({
+      where: { isActive: true },
+      select: { id: true },
     });
-    const recipients = members.map((member) => member.userId).filter((id) => !exclude.has(id));
+    const recipients = users.map((user) => user.id).filter((id) => !exclude.has(id));
     if (!recipients.length) return;
 
     const senderName = sender.nickname?.trim() || sender.name?.trim() || 'Usuario';
     await this.push.sendToUsers(recipients, {
       category: 'criticalAlerts',
       title: `🚨 EMERGENCIA · ${senderName}`,
-      body: `Solicita apoyo en ${channelName}`,
-      data: { kind: 'radio_emergency', channelId },
-    }).catch(() => undefined);
+      body: `Emergencia en ${channelName}`,
+      data: { kind: 'radio_emergency', id: alertId, channelId, senderId: sender.id, senderName },
+    }, true).catch(() => undefined);
   }
 
   async history(channelId: string, limit = 50, beforeId?: string, afterId?: string) {

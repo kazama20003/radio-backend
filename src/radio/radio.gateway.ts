@@ -411,14 +411,18 @@ export class RadioGateway
       senderName,
       createdAt: new Date(now).toISOString(),
     };
-    const importantRoom = this.importantRoom(channelId);
-    this.server.to(room).to(importantRoom).except(client.id).emit('channel:emergency', payload);
+    const connectedSockets = await this.server.fetchSockets();
+    // Las emergencias son globales: alcanzan a operadores conectados a otro
+    // canal o sin sala de radio, pero no vuelven al usuario que la envió.
+    const senderSocketIds = connectedSockets
+      .filter((socket) => (socket.data.user as WsUser | undefined)?.id === user.id)
+      .map((socket) => socket.id);
+    this.server.except(senderSocketIds).emit('channel:emergency', payload);
 
-    const listeningSockets = await this.server.in([room, importantRoom]).fetchSockets();
-    const listeningUserIds = listeningSockets
+    const connectedUserIds = connectedSockets
       .map((socket) => (socket.data.user as WsUser | undefined)?.id)
       .filter((id): id is string => Boolean(id));
-    void this.radio.notifyEmergency(channelId, channel.name, user, listeningUserIds);
+    void this.radio.notifyEmergency(channelId, channel.name, user, payload.id, connectedUserIds);
     return { ok: true, id: payload.id };
   }
 

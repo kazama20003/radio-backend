@@ -35,12 +35,13 @@ export class PushService {
   async sendToUsers(
     userIds: string[],
     payload: PushPayload,
+    ignorePreferences = false,
   ): Promise<void> {
     const ids = Array.from(new Set(userIds)).filter(Boolean);
     if (!ids.length) return;
 
     // Solo usuarios que permiten esta categoría y no están en No Molestar.
-    const eligible = await this.filterEligible(ids, payload.category);
+    const eligible = ignorePreferences ? ids : await this.filterEligible(ids, payload.category);
     if (!eligible.length) return;
 
     const devices = await this.prisma.deviceToken.findMany({
